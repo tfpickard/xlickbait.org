@@ -1,0 +1,29 @@
+# Netlify build configuration for xlickbait.org
+#
+# Deliberately minimal. Two things that are NOT here, on purpose:
+#
+#   1. No [[redirects]] catch-all. @sveltejs/adapter-netlify v6 emits its own
+#      `config = { path: ["/*"], excludedPath: ["/.netlify/*"], preferStatic: true }`
+#      inside the generated function. Adding the old
+#      `/* -> /.netlify/functions/render 200` rule that older tutorials (and
+#      Netlify's own SvelteKit guide) still suggest can shadow that routing.
+#
+#   2. No database provisioning of any kind. This project uses a standalone Neon
+#      account. Never add @netlify/database or a Netlify DB extension -- their
+#      presence makes Netlify auto-provision its own database.
+#
+# Environment variables are NOT set here. netlify.toml is committed, so it is the
+# wrong place for connection strings. DATABASE_URL is set in the Netlify UI/CLI,
+# scoped per deploy context. DATABASE_URL_UNPOOLED is never set on Netlify at all.
+
+[build]
+  command = "npm run build"
+  publish = "build"
+
+[build.environment]
+  NODE_VERSION = "24"
+
+[dev]
+  command = "npm run dev"
+  targetPort = 5173
+  port = 8888

@@ -1,0 +1,565 @@
+{
+	"version": "8",
+	"dialect": "postgres",
+	"id": "984d7aef-d4c8-44dd-80a5-e52a28a3b350",
+	"prevIds": ["00000000-0000-0000-0000-000000000000"],
+	"ddl": [
+		{
+			"values": ["fresh", "vintage"],
+			"name": "headline_kind",
+			"entityType": "enums",
+			"schema": "public"
+		},
+		{
+			"values": ["published", "hidden"],
+			"name": "headline_status",
+			"entityType": "enums",
+			"schema": "public"
+		},
+		{
+			"isRlsEnabled": false,
+			"name": "generator_runs",
+			"entityType": "tables",
+			"schema": "public"
+		},
+		{
+			"isRlsEnabled": false,
+			"name": "headlines",
+			"entityType": "tables",
+			"schema": "public"
+		},
+		{
+			"isRlsEnabled": false,
+			"name": "papers",
+			"entityType": "tables",
+			"schema": "public"
+		},
+		{
+			"type": "bigint",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 0,
+			"default": null,
+			"generated": null,
+			"identity": {
+				"type": "always",
+				"name": "generator_runs_id_seq",
+				"increment": "1",
+				"startWith": "1",
+				"minValue": "1",
+				"maxValue": "9223372036854775807",
+				"cache": 1,
+				"cycle": false
+			},
+			"name": "id",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "generator_runs"
+		},
+		{
+			"type": "timestamp with time zone",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 0,
+			"default": "now()",
+			"generated": null,
+			"identity": null,
+			"name": "started_at",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "generator_runs"
+		},
+		{
+			"type": "timestamp with time zone",
+			"typeSchema": null,
+			"notNull": false,
+			"dimensions": 0,
+			"default": null,
+			"generated": null,
+			"identity": null,
+			"name": "finished_at",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "generator_runs"
+		},
+		{
+			"type": "integer",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 0,
+			"default": "0",
+			"generated": null,
+			"identity": null,
+			"name": "fresh_count",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "generator_runs"
+		},
+		{
+			"type": "integer",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 0,
+			"default": "0",
+			"generated": null,
+			"identity": null,
+			"name": "vintage_count",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "generator_runs"
+		},
+		{
+			"type": "integer",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 0,
+			"default": "0",
+			"generated": null,
+			"identity": null,
+			"name": "rejected_count",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "generator_runs"
+		},
+		{
+			"type": "text",
+			"typeSchema": null,
+			"notNull": false,
+			"dimensions": 0,
+			"default": null,
+			"generated": null,
+			"identity": null,
+			"name": "error",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "generator_runs"
+		},
+		{
+			"type": "bigint",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 0,
+			"default": null,
+			"generated": null,
+			"identity": {
+				"type": "always",
+				"name": "headlines_id_seq",
+				"increment": "1",
+				"startWith": "1",
+				"minValue": "1",
+				"maxValue": "9223372036854775807",
+				"cache": 1,
+				"cycle": false
+			},
+			"name": "id",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "headlines"
+		},
+		{
+			"type": "text",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 0,
+			"default": null,
+			"generated": null,
+			"identity": null,
+			"name": "arxiv_id",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "headlines"
+		},
+		{
+			"type": "text",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 0,
+			"default": null,
+			"generated": null,
+			"identity": null,
+			"name": "headline",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "headlines"
+		},
+		{
+			"type": "text",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 0,
+			"default": null,
+			"generated": null,
+			"identity": null,
+			"name": "dek",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "headlines"
+		},
+		{
+			"type": "text",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 0,
+			"default": null,
+			"generated": null,
+			"identity": null,
+			"name": "anchor",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "headlines"
+		},
+		{
+			"type": "text",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 0,
+			"default": null,
+			"generated": null,
+			"identity": null,
+			"name": "actual_point",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "headlines"
+		},
+		{
+			"type": "headline_kind",
+			"typeSchema": "public",
+			"notNull": true,
+			"dimensions": 0,
+			"default": null,
+			"generated": null,
+			"identity": null,
+			"name": "kind",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "headlines"
+		},
+		{
+			"type": "text",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 0,
+			"default": null,
+			"generated": null,
+			"identity": null,
+			"name": "model",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "headlines"
+		},
+		{
+			"type": "headline_status",
+			"typeSchema": "public",
+			"notNull": true,
+			"dimensions": 0,
+			"default": "'published'",
+			"generated": null,
+			"identity": null,
+			"name": "status",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "headlines"
+		},
+		{
+			"type": "timestamp with time zone",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 0,
+			"default": "now()",
+			"generated": null,
+			"identity": null,
+			"name": "created_at",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "headlines"
+		},
+		{
+			"type": "timestamp with time zone",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 0,
+			"default": "now()",
+			"generated": null,
+			"identity": null,
+			"name": "publish_at",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "headlines"
+		},
+		{
+			"type": "text",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 0,
+			"default": null,
+			"generated": null,
+			"identity": null,
+			"name": "arxiv_id",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "papers"
+		},
+		{
+			"type": "text",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 0,
+			"default": null,
+			"generated": null,
+			"identity": null,
+			"name": "title",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "papers"
+		},
+		{
+			"type": "text",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 0,
+			"default": null,
+			"generated": null,
+			"identity": null,
+			"name": "abstract",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "papers"
+		},
+		{
+			"type": "text",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 1,
+			"default": null,
+			"generated": null,
+			"identity": null,
+			"name": "authors",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "papers"
+		},
+		{
+			"type": "text",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 0,
+			"default": null,
+			"generated": null,
+			"identity": null,
+			"name": "primary_category",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "papers"
+		},
+		{
+			"type": "text",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 1,
+			"default": null,
+			"generated": null,
+			"identity": null,
+			"name": "categories",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "papers"
+		},
+		{
+			"type": "timestamp with time zone",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 0,
+			"default": null,
+			"generated": null,
+			"identity": null,
+			"name": "published_at",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "papers"
+		},
+		{
+			"type": "text",
+			"typeSchema": null,
+			"notNull": true,
+			"dimensions": 0,
+			"default": null,
+			"generated": null,
+			"identity": null,
+			"name": "abs_url",
+			"entityType": "columns",
+			"schema": "public",
+			"table": "papers"
+		},
+		{
+			"nameExplicit": true,
+			"columns": [
+				{
+					"value": "arxiv_id",
+					"isExpression": false,
+					"asc": true,
+					"nullsFirst": false,
+					"opclass": null
+				}
+			],
+			"isUnique": true,
+			"where": "\"status\" = 'published'",
+			"with": "",
+			"method": "btree",
+			"concurrently": false,
+			"name": "headlines_one_published_per_paper",
+			"entityType": "indexes",
+			"schema": "public",
+			"table": "headlines"
+		},
+		{
+			"nameExplicit": true,
+			"columns": [
+				{
+					"value": "status",
+					"isExpression": false,
+					"asc": true,
+					"nullsFirst": false,
+					"opclass": null
+				},
+				{
+					"value": "publish_at",
+					"isExpression": false,
+					"asc": false,
+					"nullsFirst": false,
+					"opclass": null
+				},
+				{
+					"value": "id",
+					"isExpression": false,
+					"asc": false,
+					"nullsFirst": false,
+					"opclass": null
+				}
+			],
+			"isUnique": false,
+			"where": null,
+			"with": "",
+			"method": "btree",
+			"concurrently": false,
+			"name": "headlines_status_publish_at_id_idx",
+			"entityType": "indexes",
+			"schema": "public",
+			"table": "headlines"
+		},
+		{
+			"nameExplicit": true,
+			"columns": [
+				{
+					"value": "kind",
+					"isExpression": false,
+					"asc": true,
+					"nullsFirst": false,
+					"opclass": null
+				},
+				{
+					"value": "status",
+					"isExpression": false,
+					"asc": true,
+					"nullsFirst": false,
+					"opclass": null
+				},
+				{
+					"value": "publish_at",
+					"isExpression": false,
+					"asc": false,
+					"nullsFirst": false,
+					"opclass": null
+				}
+			],
+			"isUnique": false,
+			"where": null,
+			"with": "",
+			"method": "btree",
+			"concurrently": false,
+			"name": "headlines_kind_status_publish_at_idx",
+			"entityType": "indexes",
+			"schema": "public",
+			"table": "headlines"
+		},
+		{
+			"nameExplicit": true,
+			"columns": [
+				{
+					"value": "primary_category",
+					"isExpression": false,
+					"asc": true,
+					"nullsFirst": false,
+					"opclass": null
+				}
+			],
+			"isUnique": false,
+			"where": null,
+			"with": "",
+			"method": "btree",
+			"concurrently": false,
+			"name": "papers_primary_category_idx",
+			"entityType": "indexes",
+			"schema": "public",
+			"table": "papers"
+		},
+		{
+			"nameExplicit": true,
+			"columns": [
+				{
+					"value": "categories",
+					"isExpression": false,
+					"asc": true,
+					"nullsFirst": false,
+					"opclass": null
+				}
+			],
+			"isUnique": false,
+			"where": null,
+			"with": "",
+			"method": "gin",
+			"concurrently": false,
+			"name": "papers_categories_gin_idx",
+			"entityType": "indexes",
+			"schema": "public",
+			"table": "papers"
+		},
+		{
+			"nameExplicit": false,
+			"columns": ["arxiv_id"],
+			"schemaTo": "public",
+			"tableTo": "papers",
+			"columnsTo": ["arxiv_id"],
+			"onUpdate": "NO ACTION",
+			"onDelete": "CASCADE",
+			"name": "headlines_arxiv_id_papers_arxiv_id_fkey",
+			"entityType": "fks",
+			"schema": "public",
+			"table": "headlines"
+		},
+		{
+			"columns": ["id"],
+			"nameExplicit": false,
+			"name": "generator_runs_pkey",
+			"schema": "public",
+			"table": "generator_runs",
+			"entityType": "pks"
+		},
+		{
+			"columns": ["id"],
+			"nameExplicit": false,
+			"name": "headlines_pkey",
+			"schema": "public",
+			"table": "headlines",
+			"entityType": "pks"
+		},
+		{
+			"columns": ["arxiv_id"],
+			"nameExplicit": false,
+			"name": "papers_pkey",
+			"schema": "public",
+			"table": "papers",
+			"entityType": "pks"
+		}
+	],
+	"renames": []
+}
