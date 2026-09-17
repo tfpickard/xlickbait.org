@@ -117,13 +117,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # No `cache: npm` here on purpose. This job computes the same cache key as
-      # the node job (same OS, arch, package-lock.json) and they run in parallel,
-      # so both post-steps would race to save it and one would log a failure to
-      # reserve. It still RESTORES from whatever the node job saved previously.
+      # `cache: npm` is deliberate, and so is accepting that this job and the
+      # node job share a cache key (same OS, arch, package-lock.json). Omitting
+      # it does not make this job "restore only" -- setup-node does nothing with
+      # the cache at all unless `cache` is set, so this job would re-download the
+      # whole dependency tree on every run and become needlessly dependent on
+      # registry availability.
+      #
+      # The cost of sharing the key is that on a cold cache both jobs may try to
+      # save it and one logs a benign "unable to reserve" warning. That is a log
+      # line; the alternatives are serialising the jobs behind `needs: node`, or
+      # hand-writing a restore-only step keyed on setup-node's internal cache-key
+      # format -- which, if that format ever changed, would miss silently and
+      # look exactly like caching while doing nothing.
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
+          cache: npm
       - run: npm ci
 
       - uses: actions/setup-python@v5
