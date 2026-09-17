@@ -1,0 +1,199 @@
+# Everything here must pass on a clean runner with NO secrets configured --
+# a fork PR gets none, so every secret-gated suite has to SKIP, not fail.
+#
+# Deliberately absent: the Playwright e2e smoke (`npm run test:e2e`). It is the
+# only suite in the repo with no skip guard: it needs a SEEDED DATABASE_URL, and
+# against an absent or unseeded database `netlify dev` answers 500 and every
+# assertion fails. It also wants a ~180s server start and a browser download.
+# Run it locally against a seeded dev branch instead:
+#   npx playwright install --with-deps chromium && npm run test:e2e
+#
+# Also absent: `npm run test:built`. Without DATABASE_URL it builds and then
+# skips all 7 assertions, so in CI it would burn a build to prove nothing. (It
+# could never share a job with e2e regardless -- `netlify dev` deletes
+# .netlify/functions-internal/, which is the artifact test:built probes.)
+#
+# What SKIPS here rather than running: without DATABASE_URL, `npm run test`
+# executes 87 of 118 assertions -- tests/unit/queries.test.ts (the suite against
+# the seeded dev branch) and tests/unit/built-function.test.ts skip in full. That
+# is intended, but it means a green tick here does not cover the DB query layer
+# or the built function's headers. Those are the post-deploy checks documented in
+# CLAUDE.md, not something CI can do without handing a fork PR a database.
+name: CI
+
+on:
+  push:
+    # git's default branch is `master`. Neon's `main` is a DATABASE branch and
+    # has nothing to do with this.
+    branches: [master]
+  pull_request:
+
+# Nothing here publishes, deploys or comments. Read-only is all it needs.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    name: Node
+    runs-on: ubuntu-latest
+    # Everything here finishes in well under a minute; the default is 360.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # .nvmrc (24) is the single source of truth and agrees with
+          # netlify.toml's NODE_VERSION. Do NOT substitute package.json's
+          # engines.node (">=22.12"): that is a floor, and it is too low for the
+          # installed tree -- eslint wants ^20.19 || ^22.13 || >=24 and
+          # netlify-cli wants >=22.13. With .npmrc setting engine-strict=true,
+          # pinning 22.12 here would hard-fail `npm ci` before a check ran.
+          node-version-file: .nvmrc
+          cache: npm
+
+      # Never --ignore-scripts: esbuild and sharp need their postinstall. `npm
+      # ci` also runs `prepare` (svelte-kit sync), which writes the
+      # .svelte-kit/tsconfig.json that tsconfig.json extends.
+      - run: npm ci
+
+      # Lint first, and before any step that writes to the tree: eslint.config.js
+      # uses includeIgnoreFile('.gitignore') and prettier honours it too, so a
+      # generated directory that is not gitignored would turn this red. It also
+      # checks this very file -- prettier formats YAML at 2 spaces and does not
+      # apply the repo's useTabs to it, so ordinary workflow YAML passes.
+      - name: prettier + eslint
+        run: npm run lint
+
+      # svelte-check: the type-level half of the read-only guarantee (client.ts
+      # exports a handle narrowed to the select side, so db.insert does not
+      # compile).
+      - name: svelte-check
+        run: npm run check
+
+      # drizzle-kit's applied-migrations gate reads only the newest row
+      # (`order by created_at desc limit 1`), so a migration generated on a
+      # branch off an older snapshot is skipped PERMANENTLY and SILENTLY -- no
+      # error, nothing in the database to notice. `db:check` is the only thing
+      # that catches it, and it needs no database: drizzle.config.ts falls back
+      # to `url ?? ''` and this subcommand only reads drizzle/migrations/.
+      - name: drizzle migration journal
+        run: npm run db:check
+
+      # vitest, including tests/unit/no-writes.test.ts -- the source scan that
+      # catches a write smuggled through a raw SQL template. The DB-backed
+      # suites (queries, built-function) gate on Boolean(process.env.DATABASE_URL)
+      # and skip cleanly; tests/setup.ts only loads .env when one exists, and on
+      # a runner there is none. CI=true is set by Actions, which is what stops
+      # vitest writing a missing thumbnail snapshot -- those must stay
+      # byte-identical, so never pass -u here.
+      - name: vitest
+        run: npm run test
+
+      # Build last: it is the only step that needs no DB (+layout.ts sets
+      # prerender = false and the driver is created lazily in getDb()), and it
+      # writes build/ + .netlify/, so nothing lint-adjacent should follow it.
+      # static/og-default.png is committed, so `npm run og:build` is not needed.
+      - run: npm run build
+
+  # Two jobs, not one, even though this one duplicates `npm ci`: the Python
+  # checks are otherwise independent of the Node ones, so running them in
+  # parallel keeps wall-clock down and makes a red X attributable to one
+  # language. What it cannot do is drop Node -- tests/py/test_tags.py executes
+  # src/lib/cache.ts through `npx tsx` to prove the cache-tag vocabulary matches
+  # generator/tags.py, and it treats a non-zero exit as a FAILURE. Its skipif
+  # only checks for `node`, so a job with node but no node_modules would open
+  # the gate and then resolve an unpinned tsx off the registry on every run --
+  # and go red whenever the registry is slow. npm ci makes that deterministic.
+  python:
+    name: Python
+    runs-on: ubuntu-latest
+    # Everything here finishes in well under a minute; the default is 360.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # No `cache: npm` here on purpose. This job computes the same cache key as
+      # the node job (same OS, arch, package-lock.json) and they run in parallel,
+      # so both post-steps would race to save it and one would log a failure to
+      # reserve. It still RESTORES from whatever the node job saved previously.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci
+
+      - uses: actions/setup-python@v5
+        with:
+          # 3.11 matches requires-python and ruff's target-version. The source
+          # genuinely needs it: `from datetime import UTC` landed in 3.11.
+          python-version: '3.11'
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          # uv itself is pinned for the same reason ruff is: this job's job is to
+          # tell you about YOUR changes, not about what the tooling shipped today.
+          version: '0.8.17'
+          enable-cache: true
+          cache-dependency-glob: requirements-dev.txt
+
+      # From the COMPILED, fully pinned file -- not from pyproject.toml's floors.
+      # [tool.pytest.ini_options] sets filterwarnings = ["error"], so a single
+      # new DeprecationWarning in any transitive dependency is a hard failure on
+      # a commit that changed no Python. Pinning moves that from "master goes red
+      # on a Tuesday" to "a dependency bump goes red in its own PR".
+      #
+      # Regenerate after changing pyproject.toml:
+      #   uv pip compile pyproject.toml --extra dev -o requirements-dev.txt
+      #
+      # Dependencies ONLY -- never `pip install .` or `-e .`. pyproject.toml has
+      # no [build-system] table, so setuptools auto-discovery sees the top-level
+      # src/ directory, assumes src-layout, finds only TypeScript there and
+      # builds a wheel containing zero Python modules, succeeding silently. It
+      # also writes build/, which is where adapter-netlify puts its output.
+      # pytest's pythonpath = ["."] imports `generator` from the checkout, so
+      # there is nothing to install.
+      - name: Install Python dependencies
+        run: uv pip install --system -r requirements-dev.txt
+
+      # ruff is required by the documented checks but declared nowhere in
+      # pyproject.toml, so it has to be installed explicitly -- and pinned. The
+      # rule selection (RUF, UP, SIM, B, ANN) gains members in most minor
+      # releases and the formatter's output moves between them, so an unpinned
+      # ruff eventually fails a commit that changed no Python.
+      - name: Install ruff
+        run: uv pip install --system ruff==0.15.8
+
+      - name: ruff check
+        run: ruff check .
+
+      - name: ruff format
+        run: ruff format --check .
+
+      # Run from the repo root: both testpaths and pythonpath in
+      # [tool.pytest.ini_options] are relative to it, and test_tags.py shells out
+      # with cwd = repo root. No secrets are set, so test_integration.py
+      # (XLICKBAIT_TEST_DB_URL) and test_neon_branch.py (NEON_API_KEY +
+      # NEON_PROJECT_ID) skip on their own. Do not add those secrets to the whole
+      # workflow if they are ever introduced: test_neon_branch authenticates at
+      # COLLECTION time, so their mere presence costs an `npx neon@4 me` fetch
+      # plus an API round trip before any test runs.
+      - name: pytest
+        run: python -m pytest -q
+
+  # Its own job because it needs no toolchain at all: shellcheck is preinstalled
+  # on the ubuntu runner image, so this reports in seconds instead of queueing
+  # behind a 700 MB npm install. `bin/*.sh` is the complete shell surface --
+  # bin/migrate.sh and bin/run.sh are the only tracked shell files. Lint
+  # bin/run.sh, never execute it: it is a cron wrapper that hard-requires an env
+  # file outside the repo and a local .venv interpreter.
+  shell:
+    name: Shell
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck bin/*.sh
