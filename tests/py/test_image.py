@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+from collections.abc import Callable
 
 import httpx
 import pytest
@@ -326,3 +327,50 @@ class TestTheSpendCeiling:
         with painter_for(handler, budget_usd=0.0) as painter, pytest.raises(BudgetExhausted):
             painter.paint(headline="H", dek="D", category="C")
         assert calls == []
+
+
+class TestTheBudgetCountsEveryBilledCall:
+    """Regression: the spend was recorded after the response was decoded.
+
+    A billed response carrying missing or malformed image data raised before
+    `_spent` moved, and `illustrate` catches that and continues -- so a model
+    reliably returning junk could be paid for once per headline while the
+    ceiling stayed exactly where it started.
+    """
+
+    def _handler(self, body: dict) -> Callable[[httpx.Request], httpx.Response]:
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=body)
+
+        return handler
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"data": [], "usage": {"cost": 0.02}},
+            {"data": [{"b64_json": ""}], "usage": {"cost": 0.02}},
+            {"data": [{"b64_json": "not base64!!!"}], "usage": {"cost": 0.02}},
+            {
+                "data": [{"b64_json": base64.b64encode(b"not an image").decode()}],
+                "usage": {"cost": 0.02},
+            },
+        ],
+    )
+    def test_a_billed_response_is_charged_even_when_it_cannot_be_used(self, body):
+        with painter_for(self._handler(body)) as painter:
+            with pytest.raises(ImageError):
+                painter.paint(headline="H", dek="D", category="C")
+            assert painter.spent_usd == pytest.approx(0.02), (
+                "OpenRouter billed for this call; the ceiling has to know about it"
+            )
+
+    def test_repeated_junk_eventually_exhausts_the_budget(self):
+        # The failure this ordering bug allowed: an unbounded number of paid
+        # calls, because the loop that catches ImageError never saw the spend.
+        body = {"data": [{"b64_json": "not base64!!!"}], "usage": {"cost": 0.02}}
+        with painter_for(self._handler(body), budget_usd=0.05, assumed_cost_usd=0.01) as painter:
+            for _ in range(3):
+                with pytest.raises(ImageError):
+                    painter.paint(headline="H", dek="D", category="C")
+            with pytest.raises(BudgetExhausted):
+                painter.paint(headline="H", dek="D", category="C")

@@ -94,6 +94,15 @@ def command_run(args: argparse.Namespace) -> int:
         # generator_runs row with no error and no counts -- the ledger losing
         # exactly the event it exists to record.
         result = None
+        # Initialised here, not inside the `if illustrating` below. It is read
+        # unconditionally after the block, and the paths that skip illustration
+        # -- no OPENROUTER_API_KEY, --no-images, a run that published nothing --
+        # are the COMMON ones. Leaving it unbound made the documented
+        # image-optional path raise UnboundLocalError after the headlines and
+        # the run record were already committed but before the cache purge:
+        # a successful publish reported as a crash, with the new content stuck
+        # behind its old TTL.
+        images = None
         persisted = 0
         try:
             with ArxivClient(
@@ -171,13 +180,32 @@ def command_run(args: argparse.Namespace) -> int:
     _print_pending(result)
     if images is not None:
         _report_images(images)
-    elif cfg.can_illustrate:
+    elif args.no_images:
         print("images skipped (--no-images)")
     else:
-        print("no OPENROUTER_API_KEY; headlines keep their generated SVG thumbnails")
+        # The specific reason, not a guess. "no OPENROUTER_API_KEY" printed at a
+        # setup whose real problem was missing purge credentials is how someone
+        # spends an afternoon re-checking a key that was fine.
+        print(f"no images ({cfg.illustration_blocker}); headlines keep their SVG thumbnails")
 
     if cfg.can_purge:
-        tags = tags_for(result.pending, headline_ids)
+        tags = set(tags_for(result.pending, headline_ids))
+        if images is not None:
+            # `tags_for` deliberately omits `h:<id>` for a freshly published
+            # headline, on the reasoning that nothing can have been cached at a
+            # permalink that did not exist a second ago. The image pass broke
+            # that reasoning: it runs AFTER the headlines are committed and
+            # takes the better part of a minute, so a crawler or a reader can
+            # land on the new permalink in that window and cache it with the
+            # SVG fallback and the default OG card. Without this the permalink
+            # keeps that version for sMaxAge + swr -- over an hour -- despite
+            # the image being in the database the whole time.
+            #
+            # Only the ones that actually got an image: a headline whose image
+            # failed still renders exactly what was cached, so purging it would
+            # buy nothing.
+            tags |= set(tags_for_illustrations(images.illustrated))
+        tags = sorted(tags)
         assert cfg.netlify_purge_token and cfg.netlify_site_id
         made = purge.purge(tags, token=cfg.netlify_purge_token, site_id=cfg.netlify_site_id)
         print(f"purged {len(tags)} cache tags in {made} request(s)")
@@ -195,10 +223,7 @@ def command_images(args: argparse.Namespace) -> int:
     """
     cfg = config_module.load_for_images()
     if not cfg.can_illustrate:
-        print(
-            "no OPENROUTER_API_KEY set (or XLICKBAIT_IMAGES is off); nothing to do",
-            file=sys.stderr,
-        )
+        print(f"nothing to do: {cfg.illustration_blocker}", file=sys.stderr)
         return 1
 
     with db.connect(cfg.database_url) as conn:

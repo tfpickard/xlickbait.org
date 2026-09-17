@@ -47,6 +47,14 @@ export const CACHE_WINDOWS = {
 	 * is the one response on the site the browser is allowed to keep as well (see
 	 * `CacheOptions.immutable`), which matters because it is also the only one
 	 * that costs a hundred kilobytes.
+	 *
+	 * A year is also long enough to outlive a takedown, which is why the
+	 * generator REFUSES to produce images without Netlify purge credentials:
+	 * `hide` clears this entry by purging the `site` tag, and with no purge path
+	 * the CDN would never re-run `getHeadlineImage` and the illustration of a
+	 * hidden headline would stay reachable. Shortening this window is not the
+	 * fix -- it would only narrow the hole while costing an origin round trip
+	 * per image per CDN node. See "Illustrations" in CLAUDE.md.
 	 */
 	image: { sMaxAge: 31_536_000, swr: 86_400 }
 } as const;

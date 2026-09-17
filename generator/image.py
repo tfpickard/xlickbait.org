@@ -266,13 +266,20 @@ class ImagePainter:
             payload["quality"] = self._quality
 
         body = self._post(payload)
-        raw, media_type = _decode_first_image(body)
-        # Billed before the transcode, and deliberately: the call has already
-        # happened and is already on the invoice. Charging the budget only for
-        # images that survive Pillow would let a model that reliably returns
-        # something unreadable be retried until the credit ran out.
+        # Billed here, before anything is parsed out of the body. The call has
+        # already happened and is already on the invoice, so every path from
+        # this point on must be a path that charged for it.
+        #
+        # This used to sit after `_decode_first_image`, which meant a billed
+        # response carrying missing or malformed image data raised before the
+        # spend was recorded. `illustrate` catches that and moves to the next
+        # headline, so a model reliably returning junk could be paid for once
+        # per headline while the ceiling never moved -- the budget silently not
+        # counting exactly the failure it exists to bound.
         cost = _reported_cost(body, fallback=self._assumed_cost_usd)
         self._spent += cost
+
+        raw, media_type = _decode_first_image(body)
 
         data, width, height = transcode(
             raw,

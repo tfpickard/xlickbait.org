@@ -122,6 +122,22 @@ def _non_negative_float(name: str, value: float) -> float:
     return value
 
 
+def _positive_float(name: str, value: float) -> float:
+    """Strictly positive, unlike `_non_negative_float`.
+
+    For the assumed image cost specifically. Zero passes a non-negative check
+    and then disables the spend ceiling outright: when OpenRouter omits
+    `usage.cost`, every call adds zero to the running total, so the pre-call
+    `remaining < assumed` test never becomes true and the budget never binds --
+    on precisely the missing-cost path it exists to guard, and worst of all
+    under a large `images --limit`. A zero overall BUDGET is still allowed; that
+    is the off switch, and it stops the first call rather than none of them.
+    """
+    if value <= 0:
+        raise SystemExit(f"{name} must be greater than zero, got {value}")
+    return value
+
+
 def _list_env(name: str, default: list[str]) -> list[str]:
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
@@ -184,7 +200,43 @@ class Config:
 
     @property
     def can_illustrate(self) -> bool:
-        return bool(self.images_enabled and self.openrouter_api_key)
+        return self.illustration_blocker is None
+
+    @property
+    def illustration_blocker(self) -> str | None:
+        """Why illustrations are off this run, or None when they are on.
+
+        The purge requirement is the non-obvious one, and it is a takedown
+        guarantee rather than a convenience.
+
+        `/i/<id>` is held by the CDN for a YEAR -- that long TTL is what makes
+        serving image bytes out of Postgres affordable at all. `hide` without
+        purge credentials only flips the database row and relies on the cached
+        response expiring, which for every HTML page is about an hour. For an
+        image it is twelve months: the CDN never re-runs `getHeadlineImage`, so
+        the visibility rule never gets a chance to fire and the illustration of
+        a taken-down headline stays publicly reachable at a guessable URL long
+        after the headline itself is gone.
+
+        With credentials there is no hole, because `hide` purges the blunt
+        `site` tag and every cacheable response -- the image route included --
+        carries it.
+
+        So images require a working purge path. This returns a reason rather
+        than raising: illustrations are decoration, and nothing about them may
+        stop a run from publishing headlines.
+        """
+        if not self.images_enabled:
+            return "XLICKBAIT_IMAGES is off"
+        if not self.openrouter_api_key:
+            return "no OPENROUTER_API_KEY"
+        if not self.can_purge:
+            return (
+                "images need NETLIFY_PURGE_TOKEN and NETLIFY_SITE_ID: /i/<id> is cached "
+                "for a year, so without a purge `hide` would take a headline down and "
+                "leave its illustration served from the CDN"
+            )
+        return None
 
 
 # Fresh count is clamped: fewer than two is not a front page, and more than five
@@ -341,7 +393,7 @@ def image_settings() -> dict[str, object]:
         # Rounded up rather than to the observed figure: this number only gets
         # used when OpenRouter did not say, which is not the moment to be
         # optimistic.
-        "image_assumed_cost_usd": _non_negative_float(
+        "image_assumed_cost_usd": _positive_float(
             "XLICKBAIT_IMAGE_ASSUMED_COST_USD",
             _float_env("XLICKBAIT_IMAGE_ASSUMED_COST_USD", 0.03),
         ),

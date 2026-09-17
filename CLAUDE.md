@@ -400,6 +400,18 @@ turn up in the output. Its guardrails are therefore phrased as things that ARE
 true of the scene. `image_tabloid.md` is the long-form brief for when terse needs
 steering; a test keeps the default under sixty words and free of negations.
 
+**Illustrations require `NETLIFY_PURGE_TOKEN` and `NETLIFY_SITE_ID`**, and that
+is a takedown guarantee rather than a convenience. `/i/<id>` is held by the CDN
+for a year -- the long TTL is what makes serving bytes out of Postgres
+affordable -- while `hide` without purge credentials only flips the row and
+waits for the entry to lapse. For HTML that is about an hour; for an image it is
+twelve months, during which the CDN never re-runs the visibility check and the
+picture of a taken-down headline stays reachable at a guessable URL. With
+credentials there is no hole: `hide` purges the blunt `site` tag, and every
+cacheable response including the image route carries it. Missing credentials
+therefore disable images with a stated reason rather than raising -- nothing
+about decoration may stop a run from publishing.
+
 Optional, and optional all the way down. Without `OPENROUTER_API_KEY` the
 generator publishes exactly as it did before and the site draws the deterministic
 SVG from `src/lib/thumb.ts` -- which is still the fallback for any single
@@ -451,6 +463,13 @@ be purged.
 generator pointed at a database from before that migration still publishes
 headlines. Turning images on against such a database fails at startup, before
 spending money on something it cannot store.
+
+A `run` that illustrates also purges `h:<id>` for the headlines it illustrated,
+which `tags_for` alone does not. `tags_for` omits fresh permalinks on the
+reasoning that nothing can have cached a URL that did not exist a second ago --
+true until the image pass, which runs after the commit and takes the better part
+of a minute. A reader landing in that window caches the permalink with the SVG
+fallback and the default OG card, and keeps it for `sMaxAge + swr`.
 
 Backfilling is `python -m generator images`. It purges `h:<id>` as well as the
 list tags, which `tags_for` deliberately does not: a freshly published headline
