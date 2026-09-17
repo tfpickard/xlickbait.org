@@ -34,6 +34,24 @@ hooks and nothing DB-backed is prerendered.
 | `npm run db:reset-dev`        | Truncate dev and reseed                          |
 | `npm run og:build`            | Regenerate the static OG image                   |
 
+### Generator (Python)
+
+| Command                                 | What it does                                                          |
+| --------------------------------------- | --------------------------------------------------------------------- |
+| `python -m generator run`               | Pick papers, write headlines, publish, purge                          |
+| `python -m generator run --dry-run`     | Print what it would insert; writes **nothing at all**                 |
+| `python -m generator hide <id>`         | Kill switch: hide one headline (there is no web admin); purges `site` |
+| `bin/run.sh [args]`                     | Cron wrapper; loads env from outside the repo                         |
+| `pytest`                                | The generator suite (arXiv and Anthropic mocked)                      |
+| `ruff check . && ruff format --check .` | Lint                                                                  |
+| `shellcheck bin/*.sh`                   | Shell lint                                                            |
+
+`run` takes `--fresh N` (clamped 2-5), `--vintage M`, and `--stagger HOURS` to
+spread `publish_at` randomly across the next N hours. `pytest` picks up extra
+suites when `XLICKBAIT_TEST_DB_URL` (a throwaway Postgres with the migrations
+applied) or `NEON_API_KEY` + `NEON_PROJECT_ID` are set; both skip cleanly
+otherwise.
+
 `npm run test` needs `DATABASE_URL`; the DB-backed suites skip cleanly without
 one. `npm run test:e2e` needs a `netlify dev` it can reach, or
 `PLAYWRIGHT_BASE_URL` pointed at a running server.
@@ -247,3 +265,86 @@ query builder with explicit `innerJoin`s rather than `db.query.*`.
 `pg` and `sharp` are devDependencies and never reach a function: `pg` exists so
 drizzle-kit selects the wire protocol for migrations, and `sharp` only rasterises
 the OG image in `npm run og:build`.
+
+## The generator (Phase 2)
+
+Lives in `generator/`, runs from cron on a personal machine, and is the only
+writer in the system. Nothing generator-related runs on Netlify: the Anthropic
+key and the write-capable connection string must not exist there.
+
+```
+generator/config.py        every tunable, env-overridable
+generator/tags.py          cache tag vocabulary -- MUST match src/lib/cache.ts
+generator/arxiv/client.py  the one polite HTTP client
+generator/arxiv/ids.py     identifier scheme and sampling
+generator/arxiv/atom.py    parsing, withdrawal heuristics, miss reconciliation
+generator/arxiv/select.py  fresh and vintage picking
+generator/truth.py         the truth gate
+generator/llm.py           Anthropic call with structured output
+generator/db.py            psycopg 3 writes + the schema assertion
+generator/purge.py         Netlify cache-tag purge
+generator/prompts/headline_system.md   the style guide, loaded at runtime
+```
+
+### Rate limiting
+
+`XLICKBAIT_ARXIV_INTERVAL` is **clamped, not merely defaulted**: an override may
+slow the client down but can never take it below three seconds, because that
+interval is a condition of use rather than a preference.
+
+arXiv: _"make no more than one request every three seconds, and limit requests
+to a single connection at a time"_ -- and that limit applies to **all machines
+under your control as a whole**, not per process. There are no rate-limit
+headers to react to, so `RateLimiter` self-governs on a monotonic clock, and the
+transport is capped at one connection so the rule is a property of the client
+rather than a promise in a comment.
+
+Do not enable robots.txt handling anywhere near this: `export.arxiv.org`
+serves `Disallow: /`, aimed at crawlers, while the Terms of Use explicitly
+permit programmatic API use.
+
+Vintage identifiers are verified in **batches** through `id_list`, which is
+comma-delimited -- fifty candidates cost one request rather than fifty, which
+under the three-second rule is 3 seconds instead of 150. Two traps come with it:
+
+- **A partial miss is silent.** Absent identifiers are not mentioned anywhere;
+  `totalResults` just drops. `reconcile()` compares against what was requested.
+- **A malformed identifier is indistinguishable from a real miss** -- HTTP 200,
+  empty feed. Candidates are validated locally first, because arXiv will not
+  tell us.
+
+### The truth gate
+
+`anchor` must appear verbatim in the title or abstract after whitespace and case
+normalisation **and nothing else**. Not unicode folding, not punctuation
+normalisation. A model that straightens a curly quote while "copying" is
+retyping, and that is exactly what this catches.
+
+Two details that are easy to get wrong, and were:
+
+- **`str.lower()`, never `str.casefold()`.** Case folding is a Unicode
+  transformation rather than a case change -- it maps `Straße` to `strasse`, so
+  a gate built on it accepts an anchor that was retyped rather than copied.
+- **Each field is searched separately.** Concatenating title and abstract before
+  searching invents an adjacency present in neither, so an anchor spanning the
+  seam ("`...Mass`" + "`We...`" -> "`Mass We`") matched although nobody wrote it. On a miss it regenerates twice
+  with the rejected anchor quoted back, then drops the paper and picks another.
+  Rejections are counted in `generator_runs`.
+
+Structured output (`messages.parse` with a Pydantic model) guarantees the JSON
+_shape_; it says nothing about whether the anchor is real. The two checks are
+separate and the gate is never relaxed to let a headline through.
+
+### Purging
+
+`purge.py` exists as its own module for one reason. From Netlify's docs: _"If
+you don't specify a list of cache_tags, the entire site will be purged. However,
+if you specify an empty list of cache_tags, no purge will be applied."_ So a run
+that published nothing must send **no request at all** -- the difference between
+a no-op and invalidating the whole site is whether a key is present in a JSON
+body. A 404 means a wrong site id and is a hard error, never a retry.
+
+`generator/tags.py` and `src/lib/cache.ts` must agree exactly. A test executes
+both and compares, because this is the one contract in the project that fails
+silently: a drifted spelling means purges that match nothing, content that never
+updates, and `202 Accepted` every time.

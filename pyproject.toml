@@ -1,0 +1,43 @@
+[project]
+name = "xlickbait-generator"
+version = "0.1.0"
+description = "Writes technically-true, point-missing headlines about real arXiv preprints."
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.28",
+    "psycopg[binary]>=3.2",
+    "anthropic>=1.6",
+    "pydantic>=2.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov>=5"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [".venv", "node_modules", ".svelte-kit", "build"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle, pyflakes
+    "I",             # import sorting
+    "UP",            # pyupgrade
+    "B",             # bugbear
+    "SIM",           # simplify
+    "RUF",
+    "ANN",           # require annotations -- the brief asks for typed Python
+]
+ignore = ["ANN401"]  # allow Any where it is genuinely the type
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN201", "ANN001", "ANN002", "ANN003", "ANN204"]
+# The curly quote and en dash in these strings are the subject of the test: the
+# truth gate must NOT fold them to their ASCII lookalikes. Flagging them as
+# "ambiguous" is correct in general and wrong here.
+"tests/py/test_truth.py" = ["ANN201", "ANN001", "RUF001"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/py"]
+pythonpath = ["."]
+filterwarnings = ["error"]

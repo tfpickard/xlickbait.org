@@ -26,3 +26,11 @@ test-results
 
 # xlickbait
 /drizzle/meta/_journal.json.bak
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
