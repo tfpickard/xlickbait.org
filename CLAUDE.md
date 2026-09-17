@@ -61,8 +61,15 @@ one. `npm run test:e2e` needs a `netlify dev` it can reach, or
 Two namespaces that are easy to confuse:
 
 - **git**: default branch is `master`.
-- **Neon**: `main` is production, `dev` is local development and Netlify deploy
-  previews.
+- **Neon**: `main` and `dev` are **labels the tooling uses, not Neon branch
+  names**. `bin/migrate.sh <dev|main>` selects which variable to read
+  (`DATABASE_URL_UNPOOLED_MAIN` vs `DATABASE_URL_UNPOOLED`); it never sees a
+  branch name. In the Neon console the branches are called **`production`**
+  (the default branch) and **`Dev`** (a child of it). `Dev` is what local
+  development and Netlify deploy previews use.
+
+  Worth knowing before you go looking for a branch called `main` and fail to
+  find one.
 
 | Variable                        | Where it is set                                    | What it is                                                                                                                                                                |
 | ------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
