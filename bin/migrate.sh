@@ -30,11 +30,29 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 # Load .env if present so the script works the same way as the npm scripts.
+#
+# An explicitly exported value wins over .env. Sourcing assigns unconditionally,
+# so without this a caller running
+#   DATABASE_URL_UNPOOLED=<throwaway> bin/migrate.sh dev
+# would silently migrate whatever .env happens to name instead -- the caller's
+# own dev branch, or worse. The guard variables are preserved for the same
+# reason: what you exported is what gets checked.
 if [ -f .env ]; then
+	_pre_dev="${DATABASE_URL_UNPOOLED_DEV:-}"
+	_pre_main="${DATABASE_URL_UNPOOLED_MAIN:-}"
+	_pre_unpooled="${DATABASE_URL_UNPOOLED:-}"
+	_pre_prod_host="${XLICKBAIT_PROD_DB_HOST:-}"
 	set -a
 	# shellcheck disable=SC1091
 	. ./.env
 	set +a
+	# Explicit `if`, not `[ -n x ] && y=z`: under `set -e` that idiom is only safe
+	# because a command follows it, which is a trap for the next person to edit.
+	if [ -n "$_pre_dev" ]; then DATABASE_URL_UNPOOLED_DEV="$_pre_dev"; fi
+	if [ -n "$_pre_main" ]; then DATABASE_URL_UNPOOLED_MAIN="$_pre_main"; fi
+	if [ -n "$_pre_unpooled" ]; then DATABASE_URL_UNPOOLED="$_pre_unpooled"; fi
+	if [ -n "$_pre_prod_host" ]; then XLICKBAIT_PROD_DB_HOST="$_pre_prod_host"; fi
+	unset _pre_dev _pre_main _pre_unpooled _pre_prod_host
 fi
 
 case "$branch" in
@@ -71,6 +89,10 @@ if grep -rn '\$[0-9]' drizzle/migrations/*/migration.sql 2>/dev/null; then
 	echo "Rewrite the offending predicate as a raw sql template with literal values." >&2
 	exit 1
 fi
+
+# Same host-normalising guard the seed and reset scripts use, applied in both
+# directions: dev must not be production, and main must not be anything else.
+npx tsx scripts/check-migration-target.ts "$branch" "$url"
 
 transport="${MIGRATE_TRANSPORT:-wire}"
 if [ "$transport" = "http" ] && [ "$branch" = "main" ]; then

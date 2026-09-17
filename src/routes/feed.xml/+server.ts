@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
 import { listFeedEntries } from '$lib/server/db/queries';
-import { setCache } from '$lib/server/page';
+import { setTimeSensitiveCache } from '$lib/server/page';
 import { renderAtomFeed } from '$lib/feed';
 import { CACHE_WINDOWS, FEED_SIZE } from '$lib/config';
 import { TAGS } from '$lib/cache';
@@ -19,7 +19,7 @@ export const GET: RequestHandler = async (event) => {
 
 	// Cache directives still go through locals, so the feed obeys exactly the same
 	// code path -- and the same tag vocabulary -- as every HTML response.
-	setCache(event, { ...CACHE_WINDOWS.feed, tags: [TAGS.feed] });
+	await setTimeSensitiveCache(event, CACHE_WINDOWS.feed, [TAGS.feed]);
 
 	return new Response(body, {
 		headers: { 'content-type': 'application/atom+xml; charset=utf-8' }

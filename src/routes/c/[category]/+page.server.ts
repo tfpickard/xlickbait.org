@@ -1,7 +1,7 @@
 import { error } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 import { listHeadlines, parseCursorParam } from '$lib/server/db/queries';
-import { loadChumbox, setCache } from '$lib/server/page';
+import { loadChumbox, setTimeSensitiveCache } from '$lib/server/page';
 import { CACHE_WINDOWS, PAGE_SIZE } from '$lib/config';
 import { TAGS } from '$lib/cache';
 
@@ -24,7 +24,7 @@ export const load: PageServerLoad = async (event) => {
 		page.items.map((i) => i.id),
 		CACHE_WINDOWS.list.sMaxAge
 	);
-	setCache(event, { ...CACHE_WINDOWS.list, tags: [TAGS.list, TAGS.category(category)] });
+	await setTimeSensitiveCache(event, CACHE_WINDOWS.list, [TAGS.list, TAGS.category(category)]);
 
 	return { category, page, chumbox };
 };

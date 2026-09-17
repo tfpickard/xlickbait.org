@@ -3,9 +3,10 @@
 Sensational, technically true headlines about real arXiv preprints. Every one of
 them misses the point.
 
-It is satire. Every link goes to a real paper whose authors did nothing to
-deserve this, and every headline carries a "Fact check" saying what the paper
-actually does. Not affiliated with arXiv.
+It is satire, though the site itself never says so -- the deadpan is the point.
+Every link goes to a real paper whose authors did nothing to deserve this, and
+every headline carries a "Fact check" quoting the detail it ran with and saying
+what the paper actually does. Not affiliated with arXiv.
 
 ```sh
 npm install

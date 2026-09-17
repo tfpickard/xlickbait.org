@@ -2,7 +2,10 @@
 
 A straight-faced tabloid front page for arXiv preprints. Every headline is
 technically true, seizes on some peripheral detail, and completely misses the
-point of the paper it links to. It is satire, and the footer says so.
+point of the paper it links to. It is satire, and **the site never says so** --
+the deadpan is deliberate, and the footer plays it straight. The admission
+lives here, in `README.md`, and in a comment in `src/lib/components/Footer.svelte`
+that records which footer sentences are load-bearing and must not be trimmed.
 
 The engineering constraint underneath the joke: **content must appear without a
 rebuild**. A Python generator (Phase 2) runs on cron on a personal machine and
@@ -25,10 +28,29 @@ hooks and nothing DB-backed is prerendered.
 | `npm run test:built`          | Build, then assert headers on the built function |
 | `npm run test:e2e`            | Playwright smoke against `netlify dev`           |
 | `npm run db:generate`         | `drizzle-kit generate` from `schema.ts`          |
+| `npm run db:check`            | `drizzle-kit check` — see Migrations             |
 | `npm run db:migrate`          | Apply migrations to **dev**                      |
 | `npm run db:seed`             | Load fixtures into dev (idempotent)              |
 | `npm run db:reset-dev`        | Truncate dev and reseed                          |
 | `npm run og:build`            | Regenerate the static OG image                   |
+
+### Generator (Python)
+
+| Command                                 | What it does                                                          |
+| --------------------------------------- | --------------------------------------------------------------------- |
+| `python -m generator run`               | Pick papers, write headlines, publish, purge                          |
+| `python -m generator run --dry-run`     | Print what it would insert; writes **nothing at all**                 |
+| `python -m generator hide <id>`         | Kill switch: hide one headline (there is no web admin); purges `site` |
+| `bin/run.sh [args]`                     | Cron wrapper; loads env from outside the repo                         |
+| `pytest`                                | The generator suite (arXiv and Anthropic mocked)                      |
+| `ruff check . && ruff format --check .` | Lint                                                                  |
+| `shellcheck bin/*.sh`                   | Shell lint                                                            |
+
+`run` takes `--fresh N` (clamped 2-5), `--vintage M`, and `--stagger HOURS` to
+spread `publish_at` randomly across the next N hours. `pytest` picks up extra
+suites when `XLICKBAIT_TEST_DB_URL` (a throwaway Postgres with the migrations
+applied) or `NEON_API_KEY` + `NEON_PROJECT_ID` are set; both skip cleanly
+otherwise.
 
 `npm run test` needs `DATABASE_URL`; the DB-backed suites skip cleanly without
 one. `npm run test:e2e` needs a `netlify dev` it can reach, or
@@ -39,8 +61,15 @@ one. `npm run test:e2e` needs a `netlify dev` it can reach, or
 Two namespaces that are easy to confuse:
 
 - **git**: default branch is `master`.
-- **Neon**: `main` is production, `dev` is local development and Netlify deploy
-  previews.
+- **Neon**: `main` and `dev` are **labels the tooling uses, not Neon branch
+  names**. `bin/migrate.sh <dev|main>` selects which variable to read
+  (`DATABASE_URL_UNPOOLED_MAIN` vs `DATABASE_URL_UNPOOLED`); it never sees a
+  branch name. In the Neon console the branches are called **`production`**
+  (the default branch) and **`Dev`** (a child of it). `Dev` is what local
+  development and Netlify deploy previews use.
+
+  Worth knowing before you go looking for a branch called `main` and fail to
+  find one.
 
 | Variable                        | Where it is set                                    | What it is                                                                                                                                                                |
 | ------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -83,6 +112,25 @@ predicates by serialising a SQL node, and an `eq()` in a partial index emits
 after the migration was generated, reviewed and committed. Write such predicates
 as raw `sql` templates with literal values.
 
+`bin/migrate.sh` also runs the shared host guard in both directions: `dev` must
+not resolve to the production host, and `main` must not resolve to anything else
+— an empty `DATABASE_URL_UNPOOLED_MAIN` silently falling back would otherwise
+apply production migrations to dev.
+
+Run `npm run db:check` after generating. drizzle-kit's applied-migrations gate
+reads only the newest row (`order by created_at desc limit 1`), so a migration
+generated on a branch off an older snapshot is skipped **permanently and
+silently** — no error, nothing in the database to notice. `db:check` is what
+catches that.
+
+**The cache clamp shortens the stale window too, not just `s-maxage`.** Clamping
+the TTL alone left `stale-while-revalidate` authorising the CDN to keep serving
+the _pre-publication_ response for up to another `swr` seconds -- half an hour on
+the feed -- which is the exact invisibility the clamp exists to prevent. When the
+clamp binds, `clampWindow()` drops `swr` to zero so revalidation happens
+synchronously at the boundary. When it does not bind, the entry expires before
+anything changes and normal stale serving is kept.
+
 `MIGRATE_TRANSPORT=http` routes migrations through Neon's SQL-over-HTTP endpoint
 instead of the wire protocol, for networks that block 5432. It is **permitted
 for `dev` only** — the HTTP driver has no transactions, so a failure halfway
@@ -108,7 +156,19 @@ drizzle/migrations/           generated SQL — committed, never edited
 
 ## The read-only guarantee
 
-The web app issues only SELECTs, enforced three independent ways:
+The web app issues only SELECTs, enforced four independent ways:
+
+0. **A read-only Postgres role.** Migration `..._readonly_role` creates
+   `xlickbait_read` with `SELECT` and nothing else, plus default privileges so
+   later tables inherit it. Netlify's `DATABASE_URL` uses that role. This is the
+   outermost layer and the only one that does not live in the repository — the
+   three below are all bypassed by a compromised build or a dependency
+   postinstall script; a role without `INSERT`/`UPDATE`/`DELETE` is not.
+   The role is created `NOLOGIN`, because a committed migration must not carry a
+   password. Grant one out of band:
+   `ALTER ROLE xlickbait_read WITH LOGIN PASSWORD '<generated>';`
+
+The three in-repo layers:
 
 1. **Types.** `client.ts` keeps the Drizzle instance module-private and exports
    a handle narrowed to the select side, so `db.insert(...)` does not compile.
@@ -118,7 +178,8 @@ The web app issues only SELECTs, enforced three independent ways:
 3. **A source scan** in `tests/unit/no-writes.test.ts`, which is the only layer
    that catches a write smuggled through a raw SQL template string.
 
-All three are verified to fire. Do not weaken any of them to make a change pass.
+All three in-repo layers are verified to fire against a deliberate violation. Do
+not weaken any of them to make a change pass.
 
 ## Caching
 
@@ -195,9 +256,17 @@ post-deploy check: curl production twice and assert `Cache-Status` moves from
 
 Metadata only — title, abstract, authors, categories, dates. Never PDFs or full
 text. arXiv's API terms require **no** attribution (metadata is CC0 1.0) and
-forbid implying endorsement; they _request_ the acknowledgement
-"Thank you to arXiv for use of its open access interoperability", which the
-footer carries. The rate limit is one request every three seconds on a single
+forbid implying endorsement. Attribution **is** expected, though: the API landing
+page asks products to acknowledge data usage, and the brand guidelines give the
+required form for products using the API. The footer carries **both** sentences,
+verbatim:
+
+> Thank you to arXiv for use of its open access interoperability. This service
+> was not reviewed or approved by, nor does it necessarily express or reflect the
+> policies or opinions of, arXiv.
+
+The disclaimer is load-bearing given the "FROM THE ARχIVE" section heading — the
+rule is not to brand a project in a way implying endorsement. The rate limit is one request every three seconds on a single
 connection — that governs Phase 2.
 
 ## Stack notes
@@ -211,3 +280,104 @@ query builder with explicit `innerJoin`s rather than `db.query.*`.
 `pg` and `sharp` are devDependencies and never reach a function: `pg` exists so
 drizzle-kit selects the wire protocol for migrations, and `sharp` only rasterises
 the OG image in `npm run og:build`.
+
+## The generator (Phase 2)
+
+Lives in `generator/`, runs from cron on a personal machine, and is the only
+writer in the system. Nothing generator-related runs on Netlify: the Anthropic
+key and the write-capable connection string must not exist there.
+
+```
+generator/config.py        every tunable, env-overridable
+generator/tags.py          cache tag vocabulary -- MUST match src/lib/cache.ts
+generator/arxiv/client.py  the one polite HTTP client
+generator/arxiv/ids.py     identifier scheme and sampling
+generator/arxiv/atom.py    parsing, withdrawal heuristics, miss reconciliation
+generator/arxiv/select.py  fresh and vintage picking
+generator/truth.py         the truth gate
+generator/llm.py           Anthropic call with structured output
+generator/db.py            psycopg 3 writes + the schema assertion
+generator/purge.py         Netlify cache-tag purge
+generator/prompts/headline_system.md   the style guide, loaded at runtime
+```
+
+### Rate limiting
+
+`XLICKBAIT_ARXIV_INTERVAL` is **clamped, not merely defaulted**: an override may
+slow the client down but can never take it below three seconds, because that
+interval is a condition of use rather than a preference.
+
+arXiv: _"make no more than one request every three seconds, and limit requests
+to a single connection at a time"_ -- and that limit applies to **all machines
+under your control as a whole**, not per process. There are no rate-limit
+headers to react to, so `RateLimiter` self-governs on a monotonic clock, and the
+transport is capped at one connection so the rule is a property of the client
+rather than a promise in a comment.
+
+Do not enable robots.txt handling anywhere near this: `export.arxiv.org`
+serves `Disallow: /`, aimed at crawlers, while the Terms of Use explicitly
+permit programmatic API use.
+
+Vintage identifiers are verified in **batches** through `id_list`, which is
+comma-delimited -- fifty candidates cost one request rather than fifty, which
+under the three-second rule is 3 seconds instead of 150. Two traps come with it:
+
+- **A partial miss is silent.** Absent identifiers are not mentioned anywhere;
+  `totalResults` just drops. `reconcile()` compares against what was requested.
+- **A malformed identifier is indistinguishable from a real miss** -- HTTP 200,
+  empty feed. Candidates are validated locally first, because arXiv will not
+  tell us.
+
+### The truth gate
+
+`anchor` must appear verbatim in the title or abstract after whitespace and case
+normalisation **and nothing else**. Not unicode folding, not punctuation
+normalisation. A model that straightens a curly quote while "copying" is
+retyping, and that is exactly what this catches.
+
+Two details that are easy to get wrong, and were:
+
+- **`str.lower()`, never `str.casefold()`.** Case folding is a Unicode
+  transformation rather than a case change -- it maps `Straße` to `strasse`, so
+  a gate built on it accepts an anchor that was retyped rather than copied.
+- **Each field is searched separately.** Concatenating title and abstract before
+  searching invents an adjacency present in neither, so an anchor spanning the
+  seam ("`...Mass`" + "`We...`" -> "`Mass We`") matched although nobody wrote it.
+- **The stored anchor is the paper's spelling, not the model's.** Because the
+  gate tolerates case and whitespace drift, the span the model returns can differ
+  from the source in both -- and that is what would be shown under "Fact check",
+  beneath a footer promising the detail is quoted verbatim. `source_span()`
+  recovers the original substring once the gate passes, so "verbatim" is true by
+  construction rather than by the model's good manners. On a miss it regenerates twice
+  with the rejected anchor quoted back, then drops the paper and picks another.
+  Rejections are counted in `generator_runs`.
+
+Structured output (`messages.parse` with a Pydantic model) guarantees the JSON
+_shape_; it says nothing about whether the anchor is real. The two checks are
+separate and the gate is never relaxed to let a headline through.
+
+### Writing
+
+`autocommit=True` on the generator's connection is load-bearing, not tuning.
+psycopg defaults to autocommit off, so the first SELECT -- the schema assertion,
+before anything is written -- opens an implicit transaction. Every later
+`conn.transaction()` then nests inside it as a **savepoint**, committing nothing,
+and the connection context manager rolls the entire run back when an exception
+leaves the block: the published headlines, the run row, and the error written to
+explain the failure, all together. That is the precise opposite of the two things
+this module promises, one committed transaction per headline and a ledger that
+records failures.
+
+### Purging
+
+`purge.py` exists as its own module for one reason. From Netlify's docs: _"If
+you don't specify a list of cache_tags, the entire site will be purged. However,
+if you specify an empty list of cache_tags, no purge will be applied."_ So a run
+that published nothing must send **no request at all** -- the difference between
+a no-op and invalidating the whole site is whether a key is present in a JSON
+body. A 404 means a wrong site id and is a hard error, never a retry.
+
+`generator/tags.py` and `src/lib/cache.ts` must agree exactly. A test executes
+both and compares, because this is the one contract in the project that fails
+silently: a drifted spelling means purges that match nothing, content that never
+updates, and `202 Accepted` every time.

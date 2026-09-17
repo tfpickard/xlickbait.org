@@ -1,12 +1,31 @@
 import type { RequestEvent } from '@sveltejs/kit';
-import { getChumbox, type HeadlineCard } from './db/queries';
-import type { CacheOptions } from '$lib/cache';
+import { getChumbox, nextScheduledAt, type HeadlineCard } from './db/queries';
+import { clampWindow, type CacheOptions } from '$lib/cache';
 
 /**
  * Record cache directives for this request. `hooks.server.ts` applies them.
  */
 export function setCache(event: RequestEvent, options: CacheOptions): void {
 	event.locals.cache = options;
+}
+
+/**
+ * Cache a response whose contents depend on `publish_at <= now()`.
+ *
+ * Shortens the window so the cache entry expires when the next scheduled
+ * headline is due, instead of leaving it invisible for up to a full
+ * stale-while-revalidate window. Permalinks do not need this -- a published
+ * headline's own content does not change on a timer.
+ */
+export async function setTimeSensitiveCache(
+	event: RequestEvent,
+	window: { sMaxAge: number; swr: number },
+	tags: readonly string[]
+): Promise<void> {
+	const next = await nextScheduledAt();
+	// clampWindow, not clampSMaxAge: the stale window has to come down with the
+	// TTL, or the CDN keeps serving the pre-publication response past it.
+	setCache(event, { ...clampWindow(window, next, new Date()), tags });
 }
 
 /**

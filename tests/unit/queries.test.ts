@@ -4,6 +4,7 @@ import {
 	getHeadline,
 	listArchiveDays,
 	listHeadlines,
+	nextScheduledAt,
 	type HeadlineCard
 } from '$lib/server/db/queries';
 import { decodeCursor } from '$lib/server/db/cursor';
@@ -52,9 +53,23 @@ describeDb('queries against the seeded dev branch', () => {
 			}
 		});
 
-		it('excludes the specific future-dated fixtures by name', () => {
-			expect(all.some((h) => h.headline.includes('11 NIGHTS'))).toBe(false);
-			expect(all.some((h) => h.headline.includes('BY MULE'))).toBe(false);
+		it('is not vacuous: the seed still holds something scheduled', async () => {
+			// This used to name two fixtures ("BY MULE", "11 NIGHTS") and assert they
+			// were absent. Fixtures are dated relative to SEED time -- `at(+1 * HOUR)`
+			// -- so an hour after seeding the mule headline published on schedule and
+			// the assertion failed, having proved nothing about the query.
+			//
+			// The invariant above is the real test. This one exists so that it cannot
+			// pass simply because nothing is scheduled any more, and it asks the
+			// database rather than trusting a name to stay in the future.
+			const next = await nextScheduledAt();
+			expect(
+				next,
+				'no fixture is scheduled ahead of now, so the visibility test proves nothing. Re-seed: npm run db:reset-dev'
+			).not.toBeNull();
+			expect(Date.parse(next as string)).toBeGreaterThan(Date.now());
+			// And whatever that is, it must not be in the live list.
+			expect(all.some((h) => h.publishAt === next)).toBe(false);
 		});
 
 		it('hides a hidden headline from its permalink too, not just from lists', async () => {

@@ -20,7 +20,8 @@
 		"db:seed": "tsx scripts/seed.ts",
 		"db:reset-dev": "tsx scripts/reset-dev.ts",
 		"og:build": "tsx scripts/build-og.ts",
-		"test:built": "npm run build && vitest run tests/unit/built-function.test.ts"
+		"test:built": "npm run build && vitest run tests/unit/built-function.test.ts",
+		"db:check": "drizzle-kit check"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
