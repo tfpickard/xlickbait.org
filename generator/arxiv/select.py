@@ -46,7 +46,11 @@ def pick_fresh(
     rng: random.Random,
 ) -> list[Paper]:
     """Take recent submissions, randomised across the category pool."""
-    query = "cat:" + rng.choice(categories) if categories else "all:e"
+    # `cat:*` and not `all:e`. `all:` is a fielded term search, so "all:e" asked
+    # for papers containing the term "e" -- 503,564 of them against 3,171,655 for
+    # `cat:*`, measured against the live API. The default pool was quietly about
+    # a sixth of arXiv. (`all:*` is not an alternative: it returns HTTP 500.)
+    query = "cat:" + rng.choice(categories) if categories else "cat:*"
 
     # Over-fetch: some will be withdrawn or already used, and one request costs
     # three seconds whether it returns ten rows or sixty.
@@ -96,10 +100,14 @@ def pick_vintage(
             for candidate in ids.sample_candidates(batch_size, ceiling, rng)
             if candidate not in seen and ids.is_valid_new_style(candidate)
         ]
+        # A draw that yields nothing usable still costs an attempt. Counting it
+        # before the `continue` is what stops this loop spinning forever: a
+        # non-positive batch size makes `sample_candidates` return an empty list
+        # every time, and a small identifier space can exhaust into `seen`.
+        attempts += max(len(candidates), 1)
         if not candidates:
             continue
         seen.update(candidates)
-        attempts += len(candidates)
 
         papers = parse_feed(client.by_ids(candidates))
         hits, _misses = reconcile(candidates, papers)

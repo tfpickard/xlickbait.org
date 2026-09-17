@@ -24,8 +24,15 @@ _WHITESPACE = re.compile(r"\s+")
 
 
 def normalise(text: str) -> str:
-    """Collapse whitespace runs and case-fold. Nothing else."""
-    return _WHITESPACE.sub(" ", text).strip().casefold()
+    """Collapse whitespace runs and lower-case. Nothing else.
+
+    `str.lower()` and not `str.casefold()`. Case folding is a Unicode
+    transformation, not a case change: it maps "Stra\u00dfe" to "strasse", so a
+    model that retyped the sharp s as "ss" would sail through a gate that is
+    supposed to catch exactly that. `lower()` leaves the sharp s alone, and the
+    retyped anchor is rejected.
+    """
+    return _WHITESPACE.sub(" ", text).strip().lower()
 
 
 def anchor_is_supported(anchor: str, title: str, abstract: str) -> bool:
@@ -33,5 +40,7 @@ def anchor_is_supported(anchor: str, title: str, abstract: str) -> bool:
     needle = normalise(anchor)
     if not needle:
         return False
-    haystack = f"{normalise(title)} {normalise(abstract)}"
-    return needle in haystack
+    # Each field separately. Joining them with a space invents an adjacency that
+    # exists in neither: a title ending "...Mass" and an abstract opening "We..."
+    # would together support the anchor "Mass We", which nobody wrote.
+    return needle in normalise(title) or needle in normalise(abstract)

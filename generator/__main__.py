@@ -7,6 +7,7 @@ python -m generator hide <id>
 from __future__ import annotations
 
 import argparse
+import contextlib
 import random
 import sys
 from datetime import UTC, datetime
@@ -53,6 +54,13 @@ def command_run(args: argparse.Namespace) -> int:
         # direct conflict, and "touches nothing" is the one people rely on.
         run_id = None if args.dry_run else db.start_run(conn)
 
+        # Persistence lives inside this handler, not after it. Each upsert commits
+        # on its own, so a failure partway through leaves headlines published; if
+        # the write phase sat outside, that run would keep an unfinished
+        # generator_runs row with no error and no counts -- the ledger losing
+        # exactly the event it exists to record.
+        result = None
+        persisted = 0
         try:
             with ArxivClient(
                 user_agent=cfg.user_agent,
@@ -69,29 +77,45 @@ def command_run(args: argparse.Namespace) -> int:
                     rng=rng,
                     now=now,
                 )
+
+            if args.dry_run:
+                print(
+                    f"DRY RUN -- would insert {len(result.pending)} headlines "
+                    f"({result.fresh_count} fresh, {result.vintage_count} vintage); "
+                    f"{result.rejected} truth-gate rejections. Nothing was written."
+                )
+                _print_pending(result)
+                return 0
+
+            headline_ids = []
+            for item in result.pending:
+                headline_ids.append(db.upsert(conn, item, model=cfg.model))
+                persisted += 1
+
+            assert run_id is not None
+            db.finish_run(
+                conn,
+                run_id,
+                fresh=result.fresh_count,
+                vintage=result.vintage_count,
+                rejected=result.rejected,
+            )
         except Exception as exc:
             if run_id is not None:
-                db.finish_run(conn, run_id, fresh=0, vintage=0, rejected=0, error=str(exc))
+                detail = str(exc)
+                if result is not None:
+                    detail += f" (persisted {persisted} of {len(result.pending)} headlines)"
+                # Never let the bookkeeping write mask the real failure.
+                with contextlib.suppress(Exception):
+                    db.finish_run(
+                        conn,
+                        run_id,
+                        fresh=result.fresh_count if result else 0,
+                        vintage=result.vintage_count if result else 0,
+                        rejected=result.rejected if result else 0,
+                        error=detail,
+                    )
             raise
-
-        if args.dry_run:
-            print(
-                f"DRY RUN -- would insert {len(result.pending)} headlines "
-                f"({result.fresh_count} fresh, {result.vintage_count} vintage); "
-                f"{result.rejected} truth-gate rejections. Nothing was written."
-            )
-            _print_pending(result)
-            return 0
-
-        headline_ids = [db.upsert(conn, item, model=cfg.model) for item in result.pending]
-        assert run_id is not None
-        db.finish_run(
-            conn,
-            run_id,
-            fresh=result.fresh_count,
-            vintage=result.vintage_count,
-            rejected=result.rejected,
-        )
 
     print(
         f"published {len(headline_ids)} headlines "
@@ -111,7 +135,8 @@ def command_run(args: argparse.Namespace) -> int:
 
 
 def command_hide(args: argparse.Namespace) -> int:
-    cfg = config_module.load()
+    # No API key required: this is the emergency path (see config.load).
+    cfg = config_module.load(require_api_key=False)
     with db.connect(cfg.database_url) as conn:
         if not db.hide(conn, args.id):
             print(f"no headline with id {args.id}", file=sys.stderr)
@@ -122,12 +147,18 @@ def command_hide(args: argparse.Namespace) -> int:
         from generator import tags as tag_names
 
         assert cfg.netlify_purge_token and cfg.netlify_site_id
+        # Deliberately blunt: `site` and not just this headline's own tags. A
+        # hidden headline also sits in the chumbox of other headlines' permalinks,
+        # and those pages are tagged only with their OWN h:<id> -- so purging
+        # h:<this id> would leave the removed item on screen there for up to
+        # sMaxAge + swr, which is over an hour. A takedown that half-works is not
+        # a takedown, and this runs rarely enough that the cost does not matter.
         purge.purge(
-            [tag_names.headline(args.id), tag_names.LIST, tag_names.FEED, tag_names.ARCHIVE],
+            [tag_names.SITE],
             token=cfg.netlify_purge_token,
             site_id=cfg.netlify_site_id,
         )
-        print("purged its cache tags")
+        print("purged the whole site (the headline can appear in other pages' chumboxes)")
     else:
         print("no purge credentials configured; it disappears as the CDN TTL lapses")
     return 0

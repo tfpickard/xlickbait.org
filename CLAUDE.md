@@ -36,15 +36,15 @@ hooks and nothing DB-backed is prerendered.
 
 ### Generator (Python)
 
-| Command                                 | What it does                                           |
-| --------------------------------------- | ------------------------------------------------------ |
-| `python -m generator run`               | Pick papers, write headlines, publish, purge           |
-| `python -m generator run --dry-run`     | Print what it would insert; writes **nothing at all**  |
-| `python -m generator hide <id>`         | Kill switch: hide one headline (there is no web admin) |
-| `bin/run.sh [args]`                     | Cron wrapper; loads env from outside the repo          |
-| `pytest`                                | The generator suite (arXiv and Anthropic mocked)       |
-| `ruff check . && ruff format --check .` | Lint                                                   |
-| `shellcheck bin/*.sh`                   | Shell lint                                             |
+| Command                                 | What it does                                                          |
+| --------------------------------------- | --------------------------------------------------------------------- |
+| `python -m generator run`               | Pick papers, write headlines, publish, purge                          |
+| `python -m generator run --dry-run`     | Print what it would insert; writes **nothing at all**                 |
+| `python -m generator hide <id>`         | Kill switch: hide one headline (there is no web admin); purges `site` |
+| `bin/run.sh [args]`                     | Cron wrapper; loads env from outside the repo                         |
+| `pytest`                                | The generator suite (arXiv and Anthropic mocked)                      |
+| `ruff check . && ruff format --check .` | Lint                                                                  |
+| `shellcheck bin/*.sh`                   | Shell lint                                                            |
 
 `run` takes `--fresh N` (clamped 2-5), `--vintage M`, and `--stagger HOURS` to
 spread `publish_at` randomly across the next N hours. `pytest` picks up extra
@@ -288,6 +288,10 @@ generator/prompts/headline_system.md   the style guide, loaded at runtime
 
 ### Rate limiting
 
+`XLICKBAIT_ARXIV_INTERVAL` is **clamped, not merely defaulted**: an override may
+slow the client down but can never take it below three seconds, because that
+interval is a condition of use rather than a preference.
+
 arXiv: _"make no more than one request every three seconds, and limit requests
 to a single connection at a time"_ -- and that limit applies to **all machines
 under your control as a whole**, not per process. There are no rate-limit
@@ -314,9 +318,18 @@ under the three-second rule is 3 seconds instead of 150. Two traps come with it:
 `anchor` must appear verbatim in the title or abstract after whitespace and case
 normalisation **and nothing else**. Not unicode folding, not punctuation
 normalisation. A model that straightens a curly quote while "copying" is
-retyping, and that is exactly what this catches. On a miss it regenerates twice
-with the rejected anchor quoted back, then drops the paper and picks another.
-Rejections are counted in `generator_runs`.
+retyping, and that is exactly what this catches.
+
+Two details that are easy to get wrong, and were:
+
+- **`str.lower()`, never `str.casefold()`.** Case folding is a Unicode
+  transformation rather than a case change -- it maps `Straße` to `strasse`, so
+  a gate built on it accepts an anchor that was retyped rather than copied.
+- **Each field is searched separately.** Concatenating title and abstract before
+  searching invents an adjacency present in neither, so an anchor spanning the
+  seam ("`...Mass`" + "`We...`" -> "`Mass We`") matched although nobody wrote it. On a miss it regenerates twice
+  with the rejected anchor quoted back, then drops the paper and picks another.
+  Rejections are counted in `generator_runs`.
 
 Structured output (`messages.parse` with a Pydantic model) guarantees the JSON
 _shape_; it says nothing about whether the anchor is real. The two checks are

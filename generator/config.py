@@ -44,6 +44,17 @@ def _float_env(name: str, default: float) -> float:
         raise ValueError(f"{name} must be a number, got {raw!r}") from exc
 
 
+def _positive(name: str, value: int) -> int:
+    """Reject a non-positive count outright rather than hanging on it.
+
+    A zero or negative id batch makes the vintage sampler draw nothing on every
+    pass, which used to turn a cron run into a silent busy loop.
+    """
+    if value < 1:
+        raise SystemExit(f"{name} must be a positive integer, got {value}")
+    return value
+
+
 def _list_env(name: str, default: list[str]) -> list[str]:
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
@@ -102,8 +113,15 @@ def load(
     *,
     fresh: int | None = None,
     vintage: int | None = None,
+    require_api_key: bool = True,
 ) -> Config:
-    """Build a Config from the environment, with explicit CLI overrides."""
+    """Build a Config from the environment, with explicit CLI overrides.
+
+    `require_api_key=False` is for commands that never reach Anthropic. The kill
+    switch is the one that matters: `hide` must work when the key is missing,
+    expired, or mid-rotation, because that is exactly when someone is trying to
+    take a headline down in a hurry.
+    """
     database_url = os.environ.get("XLICKBAIT_DB_URL", "").strip()
     if not database_url:
         raise SystemExit(
@@ -112,7 +130,7 @@ def load(
         )
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not api_key:
+    if not api_key and require_api_key:
         raise SystemExit("ANTHROPIC_API_KEY is not set.")
 
     return Config(
@@ -123,9 +141,14 @@ def load(
         vintage_count=vintage if vintage is not None else _int_env("XLICKBAIT_VINTAGE", 4),
         category_pool=_list_env("XLICKBAIT_CATEGORIES", []),
         user_agent=os.environ.get("XLICKBAIT_USER_AGENT", DEFAULT_USER_AGENT),
-        request_interval=_float_env("XLICKBAIT_ARXIV_INTERVAL", ARXIV_MIN_INTERVAL_SECONDS),
+        # Clamped, never merely defaulted: arXiv's three seconds is a condition
+        # of use, so an override may slow the client down but never speed it up.
+        request_interval=max(
+            ARXIV_MIN_INTERVAL_SECONDS,
+            _float_env("XLICKBAIT_ARXIV_INTERVAL", ARXIV_MIN_INTERVAL_SECONDS),
+        ),
         max_retries=_int_env("XLICKBAIT_MAX_RETRIES", 3),
-        id_batch_size=_int_env("XLICKBAIT_ID_BATCH", 50),
+        id_batch_size=_positive("XLICKBAIT_ID_BATCH", _int_env("XLICKBAIT_ID_BATCH", 50)),
         max_vintage_attempts=_int_env("XLICKBAIT_MAX_VINTAGE_ATTEMPTS", 400),
         truth_gate_retries=_int_env("XLICKBAIT_TRUTH_RETRIES", 2),
         netlify_purge_token=os.environ.get("NETLIFY_PURGE_TOKEN") or None,

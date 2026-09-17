@@ -48,15 +48,26 @@ def test_python_and_typescript_produce_identical_tags():
       category: TAGS.category('cs.LG'),
     }));
     """
-    result = subprocess.run(
-        ["npx", "tsx", "--eval", script],
-        cwd=REPO,
-        capture_output=True,
-        text=True,
-        timeout=180,
+    try:
+        result = subprocess.run(
+            ["npx", "tsx", "--eval", script],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        # Skip only when the RUNNER is unavailable -- no npx on PATH, or it hung.
+        pytest.skip(f"the TypeScript runner is not usable here: {exc}")
+
+    # A non-zero exit is a FAILURE, not a skip. tsx is a checked-in dev
+    # dependency, so the only way this exits non-zero with npx present is that
+    # src/lib/cache.ts does not run -- and this is the one contract in the
+    # project that otherwise fails silently, with 202 Accepted every time.
+    assert result.returncode == 0, (
+        f"src/lib/cache.ts did not execute, so the cross-language cache-tag "
+        f"contract is unverified:\n{result.stderr[-800:]}"
     )
-    if result.returncode != 0:
-        pytest.skip(f"could not run the TypeScript side: {result.stderr[-400:]}")
 
     ts = json.loads(result.stdout.strip().splitlines()[-1])
     assert ts == {
