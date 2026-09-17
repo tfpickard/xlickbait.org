@@ -191,3 +191,38 @@ class TestTheAssumedCostCannotDisableTheCeiling:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
         monkeypatch.setenv("XLICKBAIT_IMAGE_BUDGET_USD", "0")
         assert config_module.load().image_budget_usd == 0.0
+
+
+class TestNonFiniteNumbersCannotDisableTheCeiling:
+    """Regression: `float()` accepts "nan", and every comparison to nan is False.
+
+    `XLICKBAIT_IMAGE_BUDGET_USD=nan` read as a configured budget and then made
+    `remaining < reserve` false forever, so the spend ceiling never bound and
+    every headline in a large `images --limit` could reach the paid endpoint.
+    `inf` does the same thing. Rejected in `_float_env`, so no float setting
+    added later inherits the hole.
+    """
+
+    @pytest.fixture
+    def base(self, monkeypatch) -> None:
+        monkeypatch.setenv("XLICKBAIT_DB_URL", "postgresql://u:p@host/db")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+    @pytest.mark.parametrize("value", ["nan", "NaN", "inf", "-inf", "Infinity"])
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "XLICKBAIT_IMAGE_BUDGET_USD",
+            "XLICKBAIT_IMAGE_ASSUMED_COST_USD",
+            "XLICKBAIT_IMAGE_TIMEOUT",
+            "XLICKBAIT_ARXIV_INTERVAL",
+        ],
+    )
+    def test_rejected_for_every_float_setting(self, base, monkeypatch, name, value):
+        monkeypatch.setenv(name, value)
+        with pytest.raises(SystemExit, match="finite"):
+            config_module.load()
+
+    def test_ordinary_numbers_still_work(self, base, monkeypatch):
+        monkeypatch.setenv("XLICKBAIT_IMAGE_BUDGET_USD", "1.5")
+        assert config_module.load().image_budget_usd == 1.5

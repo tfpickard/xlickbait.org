@@ -58,9 +58,14 @@ test.describe('xlickbait smoke', () => {
 			sources.push(src.href);
 		}
 
-		// Whatever the mix, every card has artwork of one kind or the other.
+		// Every card has artwork of one kind or the other. Stated against the
+		// number of thumbnail slots rather than a floor: `> 5` would still pass
+		// with a card that rendered neither an <img> nor an SVG, which is the
+		// failure the assertion is for.
 		const svgCount = await page.locator('.thumb svg').count();
-		expect(imageCount + svgCount).toBeGreaterThan(5);
+		const thumbCount = await page.locator('.thumb').count();
+		expect(thumbCount).toBeGreaterThan(5);
+		expect(imageCount + svgCount).toBe(thumbCount);
 
 		// The hero image is eager, so the browser really has decoded it by now. A
 		// naturalWidth of 0 is how a 404 or a broken bytea round trip presents.

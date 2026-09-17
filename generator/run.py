@@ -13,7 +13,7 @@ from generator.arxiv.client import ArxivClient
 from generator.arxiv.select import pick_fresh, pick_vintage
 from generator.config import Config
 from generator.db import Illustratable, PendingHeadline
-from generator.image import BudgetExhausted, ImageError, ImagePainter, RenderedImage
+from generator.image import ImageError, ImagePainter, RenderedImage, TerminalImageError
 from generator.llm import RETRY_NOTE, Headline, HeadlineWriter
 from generator.truth import anchor_is_supported, source_span
 
@@ -208,9 +208,9 @@ def illustrate(
     - `ImageError` is per-headline. The headline keeps its deterministic SVG, a
       note is recorded, and the loop moves on. An image model having a bad
       minute must not cost the site a headline it has already published.
-    - `BudgetExhausted` is per-run and terminal. Once the spend ceiling is
-      reached, every remaining call would fail the same way, so the loop stops
-      instead of generating one note per remaining headline.
+    - `TerminalImageError` is per-run. The spend ceiling, a rejected API key,
+      an account out of credit: every remaining call would fail identically, so
+      the loop stops rather than issuing one futile paid request per headline.
 
     Anything that is not an `ImageError` propagates: a bug in this code, a
     `MemoryError`, a KeyboardInterrupt on a cron box being shut down -- none of
@@ -225,7 +225,10 @@ def illustrate(
                 dek=target.dek,
                 category=target.primary_category,
             )
-        except BudgetExhausted as exc:
+        except TerminalImageError as exc:
+            # The spend ceiling, a rejected key, an account out of credit --
+            # conditions no later headline can change. One note, then stop,
+            # rather than one identical failed request per remaining headline.
             result.notes.append(str(exc))
             break
         except ImageError as exc:

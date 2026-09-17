@@ -19,6 +19,8 @@ from generator.image import (
     BudgetExhausted,
     ImageError,
     ImagePainter,
+    ProviderRefused,
+    TerminalImageError,
     build_prompt,
     load_style,
     transcode,
@@ -297,15 +299,19 @@ class TestFailureModes:
 
 class TestTheSpendCeiling:
     def test_stops_once_the_budget_is_gone(self):
+        # This used to assert a SECOND call went through and left the run at
+        # $0.10 against an $0.08 budget -- the ceiling overshooting because it
+        # kept reserving the $0.01 assumption after the model had already
+        # charged $0.05. Reserving the dearest call seen stops it at one.
         def handler(_request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json=ok_body(png_bytes(600, 400), cost=0.05))
 
         with painter_for(handler, budget_usd=0.08, assumed_cost_usd=0.01) as painter:
             painter.paint(headline="H", dek="D", category="C")
-            painter.paint(headline="H", dek="D", category="C")
-            assert painter.spent_usd == pytest.approx(0.10)
+            assert painter.spent_usd == pytest.approx(0.05)
             with pytest.raises(BudgetExhausted):
                 painter.paint(headline="H", dek="D", category="C")
+            assert painter.spent_usd <= 0.08, "the ceiling must not be passed once it is known"
 
     def test_a_missing_cost_bills_the_assumed_worst_case_not_zero(self):
         # A budget that assumes free whenever it cannot see the bill is not a
@@ -373,4 +379,63 @@ class TestTheBudgetCountsEveryBilledCall:
                 with pytest.raises(ImageError):
                     painter.paint(headline="H", dek="D", category="C")
             with pytest.raises(BudgetExhausted):
+                painter.paint(headline="H", dek="D", category="C")
+
+
+class TestTerminalFailuresStopTheRun:
+    """Regression: 401/402 were per-headline, so a bad key cost one call each.
+
+    The transport already declines to retry them, on the reasoning that nothing
+    about a rejected key changes. `illustrate` then caught the plain
+    `ImageError` and moved to the next target, re-issuing the identical request
+    for every headline in the batch — undoing that reasoning one level out.
+    """
+
+    @pytest.mark.parametrize("status", [401, 402])
+    def test_a_refused_provider_is_terminal(self, status):
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(status)
+
+        with painter_for(handler) as painter, pytest.raises(ProviderRefused):
+            painter.paint(headline="H", dek="D", category="C")
+
+    @pytest.mark.parametrize("status", [401, 402])
+    def test_terminal_errors_are_still_image_errors(self, status):
+        # They must never abort a publish: `illustrate` has to be able to catch
+        # them, and a publish is already committed by the time it runs.
+        assert issubclass(ProviderRefused, ImageError)
+        assert issubclass(BudgetExhausted, TerminalImageError)
+        assert issubclass(TerminalImageError, ImageError)
+        del status
+
+    def test_an_ordinary_failure_is_not_terminal(self):
+        # A malformed body is this headline's problem, not the run's.
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"data": []})
+
+        with painter_for(handler) as painter:
+            try:
+                painter.paint(headline="H", dek="D", category="C")
+            except TerminalImageError:  # pragma: no cover - the failure case
+                pytest.fail("a bad response body must not end the whole run")
+            except ImageError:
+                pass
+
+
+class TestTheOvershootIsBounded:
+    def test_reserves_the_dearest_call_seen_rather_than_the_assumption(self):
+        # The ceiling is necessarily soft -- a call's price is only known once
+        # it has been billed -- so a run can exceed the budget by the call in
+        # flight. What it must not do is keep under-reserving after the model
+        # has already proved the assumption wrong.
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=ok_body(png_bytes(600, 400), cost=0.12))
+
+        with painter_for(handler, budget_usd=0.25, assumed_cost_usd=0.01) as painter:
+            painter.paint(headline="H", dek="D", category="C")
+            painter.paint(headline="H", dek="D", category="C")
+            assert painter.spent_usd == pytest.approx(0.24)
+            # Reserving 0.01 would admit a third call and land at 0.36, well past
+            # the budget. Reserving the observed 0.12 stops here.
+            with pytest.raises(BudgetExhausted, match="reserving"):
                 painter.paint(headline="H", dek="D", category="C")

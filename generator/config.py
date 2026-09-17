@@ -8,6 +8,7 @@ purges that match nothing.
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass, field
 
@@ -63,9 +64,20 @@ def _float_env(name: str, default: float) -> float:
     if raw is None or not raw.strip():
         return default
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError as exc:
         raise ValueError(f"{name} must be a number, got {raw!r}") from exc
+    # `float()` accepts "nan" and "inf", and EVERY comparison against nan is
+    # False -- including the `remaining < reserve` test the image spend ceiling
+    # is built on. `XLICKBAIT_IMAGE_BUDGET_USD=nan` would therefore read as a
+    # configured budget and then never bind, letting every headline in a large
+    # `images --limit` reach the paid endpoint. `inf` does the same thing more
+    # honestly. Neither is a number anyone means to type, and both are rejected
+    # here rather than at each use, so no later float setting can inherit the
+    # hole.
+    if not math.isfinite(value):
+        raise SystemExit(f"{name} must be a finite number, got {raw!r}")
+    return value
 
 
 def _positive(name: str, value: int) -> int:

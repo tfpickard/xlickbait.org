@@ -77,8 +77,29 @@ class ImageError(RuntimeError):
     """An illustration could not be produced. Never fatal to a run."""
 
 
-class BudgetExhausted(ImageError):
+class TerminalImageError(ImageError):
+    """This run will not produce any more images. Stop the loop.
+
+    Still an `ImageError`, so it can never abort a publish -- `illustrate`
+    catches it, records the reason and stops asking. The distinction matters
+    because the alternative is one futile paid-endpoint request per headline
+    for a condition that cannot improve within the run.
+    """
+
+
+class BudgetExhausted(TerminalImageError):
     """The run's image spend ceiling was reached. Stop asking for more."""
+
+
+class ProviderRefused(TerminalImageError):
+    """OpenRouter rejected the key or the account is out of credit.
+
+    Terminal for the same reason the transport does not retry a 401: nothing
+    about the next headline changes the answer. Raised as a plain `ImageError`
+    it was caught per target and re-issued for every remaining headline in the
+    batch -- the exact behaviour the "retrying cannot help" comment on the
+    status handling was written to prevent, one level further out.
+    """
 
 
 @dataclass(frozen=True)
@@ -217,6 +238,7 @@ class ImagePainter:
         self._max_retries = max_retries
         self._sleep = sleep
         self._spent = 0.0
+        self._dearest_call = 0.0
 
         self._owns_client = client is None
         self._http = client or httpx.Client(timeout=httpx.Timeout(timeout))
@@ -245,11 +267,20 @@ class ImagePainter:
 
     def paint(self, *, headline: str, dek: str, category: str) -> RenderedImage:
         """Generate one illustration. Raises `ImageError` on any failure."""
+        # Reserve the dearest call seen so far, not merely the configured
+        # assumption. The ceiling can only ever be a soft one -- the price is
+        # not known until the call has happened and been billed -- so a run can
+        # overshoot by at most the cost of the call in flight. Reserving the
+        # observed maximum means that after the first surprise the overshoot is
+        # bounded by what this model really charges, instead of by an assumption
+        # that a misconfigured slug has already proved wrong.
+        reserve = max(self._assumed_cost_usd, self._dearest_call)
         remaining = self._budget_usd - self._spent
-        if remaining < self._assumed_cost_usd:
+        if remaining < reserve:
             raise BudgetExhausted(
                 f"image budget of ${self._budget_usd:.4f} is spent "
-                f"(${self._spent:.4f} so far); skipping the rest"
+                f"(${self._spent:.4f} so far, reserving ${reserve:.4f} per call); "
+                "skipping the rest"
             )
 
         prompt = build_prompt(self._template, headline=headline, dek=dek, category=category)
@@ -278,6 +309,7 @@ class ImagePainter:
         # counting exactly the failure it exists to bound.
         cost = _reported_cost(body, fallback=self._assumed_cost_usd)
         self._spent += cost
+        self._dearest_call = max(self._dearest_call, cost)
 
         raw, media_type = _decode_first_image(body)
 
@@ -315,11 +347,11 @@ class ImagePainter:
                 )
                 continue
             if response.status_code == 401:
-                # Retrying cannot fix a rejected key, and the whole run would
-                # otherwise spend its retry budget discovering that repeatedly.
-                raise ImageError("OpenRouter rejected the API key (401)")
+                # Terminal, not merely un-retried: neither this transport's
+                # retry loop nor the next headline can make a rejected key work.
+                raise ProviderRefused("OpenRouter rejected the API key (401)")
             if response.status_code == 402:
-                raise ImageError("OpenRouter reports insufficient credit (402)")
+                raise ProviderRefused("OpenRouter reports insufficient credit (402)")
             if response.status_code >= 400:
                 raise ImageError(
                     f"OpenRouter returned HTTP {response.status_code}: {response.text[:200]}"
