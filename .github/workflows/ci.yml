@@ -159,14 +159,11 @@ jobs:
       - name: Install Python dependencies
         run: uv pip install --system -r requirements-dev.txt
 
-      # ruff is required by the documented checks but declared nowhere in
-      # pyproject.toml, so it has to be installed explicitly -- and pinned. The
-      # rule selection (RUF, UP, SIM, B, ANN) gains members in most minor
-      # releases and the formatter's output moves between them, so an unpinned
-      # ruff eventually fails a commit that changed no Python.
-      - name: Install ruff
-        run: uv pip install --system ruff==0.15.8
-
+      # ruff arrives with the block above: it is pinned in pyproject.toml's dev
+      # extra and compiled into requirements-dev.txt, so there is exactly one
+      # place to bump it. A second `uv pip install ruff==...` step here would not
+      # merely be redundant -- it runs AFTER the requirements file and would
+      # therefore win, silently reverting a version bump made in pyproject.toml.
       - name: ruff check
         run: ruff check .
 
