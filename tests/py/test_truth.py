@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from generator.truth import anchor_is_supported, normalise
+from generator.truth import anchor_is_supported, normalise, source_span
 
 TITLE = "A Refined Upper Bound on Neutrino Mass"
 ABSTRACT = (
@@ -100,3 +100,36 @@ class TestNormalisationIsNotFolding:
         assert anchor_is_supported("Neutrino Mass", title, abstract)
         assert anchor_is_supported("We report a bound", title, abstract)
         assert not anchor_is_supported("Neutrino Mass We report", title, abstract)
+
+
+class TestSourceSpanMakesVerbatimTrue:
+    """The gate tolerates case and whitespace drift, so the model's spelling of
+    the anchor is not necessarily the paper's. The site tells readers the detail
+    is quoted verbatim, so the stored span is recovered from the source."""
+
+    def test_recovers_the_papers_capitalisation(self):
+        title = "A Refined Upper Bound on Neutrino Mass"
+        assert source_span("refined upper bound", title, "") == "Refined Upper Bound"
+
+    def test_recovers_the_papers_whitespace(self):
+        abstract = "We used a  bolometer   array at 10 mK."
+        assert source_span("a bolometer array", "", abstract) == "a  bolometer   array"
+
+    def test_searches_the_abstract_as_well_as_the_title(self):
+        assert source_span("we show that", "Title", "We show that x") == "We show that"
+
+    def test_returns_none_when_the_span_is_absent(self):
+        assert source_span("not in the paper", "Title", "Abstract") is None
+
+    def test_returns_none_for_an_empty_anchor(self):
+        assert source_span("   ", "Title", "Abstract") is None
+
+    def test_anything_it_returns_is_a_literal_substring_of_the_source(self):
+        # The property that matters: whatever gets stored must appear byte for
+        # byte in the paper, which is what "verbatim" has to mean.
+        title = "On the Detector's Calibration"
+        abstract = "We report a 10-20 percent improvement over three years."
+        for anchor in ("DETECTOR'S CALIBRATION", "10-20 PERCENT", "three   years"):
+            span = source_span(anchor, title, abstract)
+            assert span is not None
+            assert span in title or span in abstract

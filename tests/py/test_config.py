@@ -65,11 +65,57 @@ class TestTheKillSwitchDoesNotNeedTheModel:
         # `hide` never calls Anthropic, and the moment you most need to take a
         # headline down is exactly when the key may be missing or mid-rotation.
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        cfg = config_module.load(require_api_key=False)
+        cfg = config_module.load_for_hide()
         assert cfg.database_url.startswith("postgresql://")
         assert cfg.anthropic_api_key == ""
 
     def test_the_database_url_is_still_required_either_way(self, monkeypatch):
         monkeypatch.delenv("XLICKBAIT_DB_URL", raising=False)
         with pytest.raises(SystemExit, match="XLICKBAIT_DB_URL"):
-            config_module.load(require_api_key=False)
+            config_module.load_for_hide()
+
+
+class TestTheKillSwitchIgnoresRunSettings:
+    """`hide` calls neither Anthropic nor arXiv, so no generation setting may be
+    able to stop a takedown. The moment you need it is the moment something else
+    is already wrong."""
+
+    def test_a_bad_id_batch_does_not_block_hide(self, monkeypatch):
+        monkeypatch.setenv("XLICKBAIT_ID_BATCH", "0")
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        assert config_module.load_for_hide().database_url.startswith("postgresql://")
+
+    def test_a_malformed_interval_does_not_block_hide(self, monkeypatch):
+        monkeypatch.setenv("XLICKBAIT_ARXIV_INTERVAL", "not-a-number")
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        assert config_module.load_for_hide().database_url.startswith("postgresql://")
+
+    def test_but_a_run_still_rejects_those_values(self, monkeypatch):
+        monkeypatch.setenv("XLICKBAIT_ID_BATCH", "0")
+        with pytest.raises(SystemExit):
+            config_module.load()
+
+    def test_hide_still_needs_a_database(self, monkeypatch):
+        monkeypatch.delenv("XLICKBAIT_DB_URL", raising=False)
+        with pytest.raises(SystemExit, match="XLICKBAIT_DB_URL"):
+            config_module.load_for_hide()
+
+    def test_hide_picks_up_purge_credentials_when_present(self, monkeypatch):
+        monkeypatch.setenv("NETLIFY_PURGE_TOKEN", "t")
+        monkeypatch.setenv("NETLIFY_SITE_ID", "s")
+        assert config_module.load_for_hide().can_purge is True
+
+
+class TestVintageCount:
+    @pytest.mark.parametrize("value", ["-1", "-10"])
+    def test_a_negative_vintage_count_is_rejected(self, monkeypatch, value):
+        # It used to be honoured: pick_vintage returned nothing, the shortage
+        # check passed, and the run was recorded a success having published fewer
+        # headlines than asked for, with nothing to say why.
+        monkeypatch.setenv("XLICKBAIT_VINTAGE", value)
+        with pytest.raises(SystemExit, match="XLICKBAIT_VINTAGE"):
+            config_module.load()
+
+    def test_zero_still_means_disabled(self, monkeypatch):
+        monkeypatch.setenv("XLICKBAIT_VINTAGE", "0")
+        assert config_module.load().vintage_count == 0

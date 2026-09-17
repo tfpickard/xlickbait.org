@@ -123,6 +123,14 @@ generated on a branch off an older snapshot is skipped **permanently and
 silently** — no error, nothing in the database to notice. `db:check` is what
 catches that.
 
+**The cache clamp shortens the stale window too, not just `s-maxage`.** Clamping
+the TTL alone left `stale-while-revalidate` authorising the CDN to keep serving
+the _pre-publication_ response for up to another `swr` seconds -- half an hour on
+the feed -- which is the exact invisibility the clamp exists to prevent. When the
+clamp binds, `clampWindow()` drops `swr` to zero so revalidation happens
+synchronously at the boundary. When it does not bind, the entry expires before
+anything changes and normal stale serving is kept.
+
 `MIGRATE_TRANSPORT=http` routes migrations through Neon's SQL-over-HTTP endpoint
 instead of the wire protocol, for networks that block 5432. It is **permitted
 for `dev` only** — the HTTP driver has no transactions, so a failure halfway
@@ -334,13 +342,31 @@ Two details that are easy to get wrong, and were:
   a gate built on it accepts an anchor that was retyped rather than copied.
 - **Each field is searched separately.** Concatenating title and abstract before
   searching invents an adjacency present in neither, so an anchor spanning the
-  seam ("`...Mass`" + "`We...`" -> "`Mass We`") matched although nobody wrote it. On a miss it regenerates twice
+  seam ("`...Mass`" + "`We...`" -> "`Mass We`") matched although nobody wrote it.
+- **The stored anchor is the paper's spelling, not the model's.** Because the
+  gate tolerates case and whitespace drift, the span the model returns can differ
+  from the source in both -- and that is what would be shown under "Fact check",
+  beneath a footer promising the detail is quoted verbatim. `source_span()`
+  recovers the original substring once the gate passes, so "verbatim" is true by
+  construction rather than by the model's good manners. On a miss it regenerates twice
   with the rejected anchor quoted back, then drops the paper and picks another.
   Rejections are counted in `generator_runs`.
 
 Structured output (`messages.parse` with a Pydantic model) guarantees the JSON
 _shape_; it says nothing about whether the anchor is real. The two checks are
 separate and the gate is never relaxed to let a headline through.
+
+### Writing
+
+`autocommit=True` on the generator's connection is load-bearing, not tuning.
+psycopg defaults to autocommit off, so the first SELECT -- the schema assertion,
+before anything is written -- opens an implicit transaction. Every later
+`conn.transaction()` then nests inside it as a **savepoint**, committing nothing,
+and the connection context manager rolls the entire run back when an exception
+leaves the block: the published headlines, the run row, and the error written to
+explain the failure, all together. That is the precise opposite of the two things
+this module promises, one committed transaction per headline and a ledger that
+records failures.
 
 ### Purging
 

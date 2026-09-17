@@ -55,6 +55,19 @@ def _positive(name: str, value: int) -> int:
     return value
 
 
+def _non_negative(name: str, value: int) -> int:
+    """Reject a negative count rather than quietly shrinking the run.
+
+    Zero is a meaningful setting -- it disables vintage picks. A negative value
+    is truthy, so it reached `pick_vintage`, whose loop and shortage check both
+    pass immediately; the run was then recorded as a success having published
+    fewer headlines than asked for, with nothing to indicate why.
+    """
+    if value < 0:
+        raise SystemExit(f"{name} must be zero or greater, got {value}")
+    return value
+
+
 def _list_env(name: str, default: list[str]) -> list[str]:
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
@@ -109,28 +122,49 @@ def clamp_fresh(value: int) -> int:
     return max(FRESH_MIN, min(FRESH_MAX, value))
 
 
-def load(
-    *,
-    fresh: int | None = None,
-    vintage: int | None = None,
-    require_api_key: bool = True,
-) -> Config:
-    """Build a Config from the environment, with explicit CLI overrides.
-
-    `require_api_key=False` is for commands that never reach Anthropic. The kill
-    switch is the one that matters: `hide` must work when the key is missing,
-    expired, or mid-rotation, because that is exactly when someone is trying to
-    take a headline down in a hurry.
-    """
-    database_url = os.environ.get("XLICKBAIT_DB_URL", "").strip()
-    if not database_url:
+def _database_url() -> str:
+    url = os.environ.get("XLICKBAIT_DB_URL", "").strip()
+    if not url:
         raise SystemExit(
             "XLICKBAIT_DB_URL is not set. It must be a write-capable connection "
             "string for the Neon branch this generator writes to."
         )
+    return url
+
+
+def load_for_hide() -> Config:
+    """Configuration for the kill switch: database and purge, nothing else.
+
+    This deliberately does not read -- let alone validate -- a single generation
+    setting. `hide` calls neither Anthropic nor arXiv, so an absent API key, a
+    malformed XLICKBAIT_ARXIV_INTERVAL or an XLICKBAIT_ID_BATCH of 0 must not be
+    able to stop a takedown. Routing this through the full loader meant a bad
+    cron tuning value could disable the only mechanism for removing a headline,
+    and the moment you need it is exactly the moment something else is wrong.
+
+    The generation fields below are inert placeholders, never used on this path.
+    """
+    return Config(
+        database_url=_database_url(),
+        anthropic_api_key="",
+        model="",
+        fresh_count=0,
+        vintage_count=0,
+        netlify_purge_token=os.environ.get("NETLIFY_PURGE_TOKEN") or None,
+        netlify_site_id=os.environ.get("NETLIFY_SITE_ID") or None,
+    )
+
+
+def load(
+    *,
+    fresh: int | None = None,
+    vintage: int | None = None,
+) -> Config:
+    """Build a Config for a generation run, with explicit CLI overrides."""
+    database_url = _database_url()
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not api_key and require_api_key:
+    if not api_key:
         raise SystemExit("ANTHROPIC_API_KEY is not set.")
 
     return Config(
@@ -138,7 +172,10 @@ def load(
         anthropic_api_key=api_key,
         model=os.environ.get("XLICKBAIT_MODEL", "claude-sonnet-5").strip(),
         fresh_count=clamp_fresh(fresh if fresh is not None else _int_env("XLICKBAIT_FRESH", 3)),
-        vintage_count=vintage if vintage is not None else _int_env("XLICKBAIT_VINTAGE", 4),
+        vintage_count=_non_negative(
+            "XLICKBAIT_VINTAGE",
+            vintage if vintage is not None else _int_env("XLICKBAIT_VINTAGE", 4),
+        ),
         category_pool=_list_env("XLICKBAIT_CATEGORIES", []),
         user_agent=os.environ.get("XLICKBAIT_USER_AGENT", DEFAULT_USER_AGENT),
         # Clamped, never merely defaulted: arXiv's three seconds is a condition

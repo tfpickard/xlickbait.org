@@ -123,7 +123,10 @@ def throwaway_branch() -> Iterator[str]:
         pytest.skip(f"could not create a Neon branch: {created.stderr[-300:]}")
 
     try:
-        result = _neon("connection-string", name, "--project-id", PROJECT_ID, "--pooled")
+        # Direct, NOT --pooled: migrations need session state that PgBouncer's
+        # transaction mode cannot hold, and labelling a pooled URL "UNPOOLED"
+        # meant this test never exercised the documented migration transport.
+        result = _neon("connection-string", name, "--project-id", PROJECT_ID)
         if result.returncode != 0:
             pytest.skip(f"could not read the connection string: {result.stderr[-300:]}")
         # `connection-string` emits a bare string, not JSON, even with --output json.
@@ -135,7 +138,20 @@ def throwaway_branch() -> Iterator[str]:
 def test_generator_writes_to_a_fresh_branch(throwaway_branch: str) -> None:
     from generator import db
 
-    env = {**os.environ, "DATABASE_URL_UNPOOLED": throwaway_branch, "MIGRATE_TRANSPORT": "http"}
+    env = {
+        **os.environ,
+        # DATABASE_URL_UNPOOLED_DEV, not DATABASE_URL_UNPOOLED: bin/migrate.sh
+        # sources .env AFTER inheriting this environment, and a developer's .env
+        # defines the latter -- which would migrate their own dev branch while
+        # these assertions queried the throwaway one.
+        "DATABASE_URL_UNPOOLED_DEV": throwaway_branch,
+        "MIGRATE_TRANSPORT": "http",
+        # The dev path fails closed when no production host is configured, which
+        # is correct and would otherwise make this unrunnable in clean CI. The
+        # target here is a branch this test created seconds ago and deletes in
+        # teardown, so there is nothing to protect.
+        "XLICKBAIT_ALLOW_NO_PROD_GUARD": "1",
+    }
     migrated = subprocess.run(
         ["./bin/migrate.sh", "dev"], capture_output=True, text=True, env=env, timeout=300
     )
@@ -158,7 +174,7 @@ def test_generator_writes_to_a_fresh_branch(throwaway_branch: str) -> None:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT h.id, h.anchor, p.arxiv_id FROM headlines h "
-                "JOIN papers p ON p.id = h.paper_id ORDER BY h.id"
+                "JOIN papers p ON p.arxiv_id = h.arxiv_id ORDER BY h.id"
             )
             rows = cur.fetchall()
         assert [r["id"] for r in rows] == [first, second]
@@ -171,7 +187,9 @@ def test_generator_writes_to_a_fresh_branch(throwaway_branch: str) -> None:
         assert db.published_arxiv_ids(conn) == {"1108.1068"}
 
         with conn.cursor() as cur:
-            cur.execute("SELECT fresh, vintage, rejected, finished_at FROM generator_runs")
+            cur.execute(
+                "SELECT fresh_count, vintage_count, rejected_count, finished_at FROM generator_runs"
+            )
             run = cur.fetchone()
-        assert (run["fresh"], run["vintage"], run["rejected"]) == (1, 1, 0)
+        assert (run["fresh_count"], run["vintage_count"], run["rejected_count"]) == (1, 1, 0)
         assert run["finished_at"] is not None

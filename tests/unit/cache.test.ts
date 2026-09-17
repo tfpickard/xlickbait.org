@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { TAGS, cacheHeaders, cacheTagValue, clampSMaxAge, noCacheHeaders } from '$lib/cache';
+import {
+	TAGS,
+	cacheHeaders,
+	cacheTagValue,
+	clampSMaxAge,
+	clampWindow,
+	noCacheHeaders
+} from '$lib/cache';
 
 describe('cacheHeaders', () => {
 	const headers = cacheHeaders({ sMaxAge: 60, swr: 300, tags: [TAGS.list] });
@@ -103,5 +110,45 @@ describe('clampSMaxAge', () => {
 
 	it('handles the Postgres timestamptz spelling', () => {
 		expect(clampSMaxAge(60, '2026-09-17 12:00:30+00', now)).toBe(30);
+	});
+});
+
+describe('clampWindow', () => {
+	const now = new Date('2026-09-17T12:00:00.000Z');
+	const window = { sMaxAge: 60, swr: 300 };
+
+	it('drops the stale window when the clamp binds', () => {
+		// The hole this closes: clamping s-maxage alone still let the CDN serve
+		// THIS pre-publication response for another `swr` seconds after the
+		// shortened TTL lapsed, which is the exact invisibility the clamp exists
+		// to prevent. A zero stale window forces synchronous revalidation at the
+		// publication boundary.
+		expect(clampWindow(window, '2026-09-17T12:00:20.000Z', now)).toEqual({
+			sMaxAge: 20,
+			swr: 0
+		});
+	});
+
+	it('leaves the stale window alone when the clamp does not bind', () => {
+		// The entry expires well before anything changes, so normal stale serving
+		// cannot surface pre-publication content and is worth keeping.
+		expect(clampWindow(window, '2026-09-18T12:00:00.000Z', now)).toEqual({
+			sMaxAge: 60,
+			swr: 300
+		});
+	});
+
+	it('leaves the window untouched when nothing is scheduled', () => {
+		expect(clampWindow(window, null, now)).toEqual({ sMaxAge: 60, swr: 300 });
+	});
+
+	it('still floors s-maxage at 1, and suppresses stale serving there too', () => {
+		// A publication already due: s-maxage of 0 would disable CDN caching
+		// entirely, but serving the stale pre-publication copy is not acceptable
+		// either, so the one-second entry must not be extendable by swr.
+		expect(clampWindow(window, '2026-09-17T11:59:00.000Z', now)).toEqual({
+			sMaxAge: 1,
+			swr: 0
+		});
 	});
 });

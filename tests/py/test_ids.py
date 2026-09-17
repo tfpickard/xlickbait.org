@@ -93,3 +93,19 @@ class TestSampling:
         assert months[-1] == 1502
         assert 1412 in months and 1501 in months
         assert 1413 not in months  # no thirteenth month
+
+
+class TestVersionSuffix:
+    """A malformed id_list entry returns an empty feed, shaped exactly like a
+    real miss -- so anything not rejected locally is invisible for the rest of
+    the run."""
+
+    def test_accepts_real_version_suffixes(self):
+        assert ids.is_valid_new_style("2401.01234v1")
+        assert ids.is_valid_new_style("2401.01234v7")
+
+    def test_rejects_version_zero(self):
+        # The suffix was captured by the regex and never validated, so this was
+        # accepted and sent to arXiv, which cannot tell us it is malformed.
+        assert not ids.is_valid_new_style("2401.01234v0")
+        assert not ids.is_valid_new_style("2401.01234v00")

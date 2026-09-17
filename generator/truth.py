@@ -35,6 +35,30 @@ def normalise(text: str) -> str:
     return _WHITESPACE.sub(" ", text).strip().lower()
 
 
+def source_span(anchor: str, title: str, abstract: str) -> str | None:
+    """Return the anchor exactly as the PAPER spells it, or None if absent.
+
+    The gate tolerates whitespace and case differences, so the span the model
+    returns can differ from the source in both -- and it is the model's version
+    that gets stored and shown under "Fact check". The site tells readers each
+    detail is "quoted verbatim from the paper's own title or abstract", and that
+    should be true by construction rather than by the model's good manners.
+
+    So once the gate passes, the original substring is recovered and stored
+    instead. The pattern here tolerates exactly what `normalise` tolerates and
+    nothing more: any run of whitespace matches any other, case is ignored.
+    """
+    tokens = anchor.split()
+    if not tokens:
+        return None
+    pattern = re.compile(r"\s+".join(map(re.escape, tokens)), re.IGNORECASE)
+    for field in (title, abstract):
+        found = pattern.search(field)
+        if found:
+            return found.group(0)
+    return None
+
+
 def anchor_is_supported(anchor: str, title: str, abstract: str) -> bool:
     """True when `anchor` appears verbatim in the title or abstract."""
     needle = normalise(anchor)

@@ -135,8 +135,9 @@ def command_run(args: argparse.Namespace) -> int:
 
 
 def command_hide(args: argparse.Namespace) -> int:
-    # No API key required: this is the emergency path (see config.load).
-    cfg = config_module.load(require_api_key=False)
+    # Database and purge only -- no generation settings are read or validated,
+    # so a bad cron tuning value cannot disable the takedown path.
+    cfg = config_module.load_for_hide()
     with db.connect(cfg.database_url) as conn:
         if not db.hide(conn, args.id):
             print(f"no headline with id {args.id}", file=sys.stderr)

@@ -1,6 +1,6 @@
 import type { RequestEvent } from '@sveltejs/kit';
 import { getChumbox, nextScheduledAt, type HeadlineCard } from './db/queries';
-import { clampSMaxAge, type CacheOptions } from '$lib/cache';
+import { clampWindow, type CacheOptions } from '$lib/cache';
 
 /**
  * Record cache directives for this request. `hooks.server.ts` applies them.
@@ -23,11 +23,9 @@ export async function setTimeSensitiveCache(
 	tags: readonly string[]
 ): Promise<void> {
 	const next = await nextScheduledAt();
-	setCache(event, {
-		...window,
-		sMaxAge: clampSMaxAge(window.sMaxAge, next, new Date()),
-		tags
-	});
+	// clampWindow, not clampSMaxAge: the stale window has to come down with the
+	// TTL, or the CDN keeps serving the pre-publication response past it.
+	setCache(event, { ...clampWindow(window, next, new Date()), tags });
 }
 
 /**

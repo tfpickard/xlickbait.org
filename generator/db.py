@@ -68,7 +68,22 @@ class SchemaMismatch(RuntimeError):
 
 @contextmanager
 def connect(database_url: str) -> Iterator[psycopg.Connection]:
-    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+    """Open a connection whose `transaction()` blocks really are transactions.
+
+    `autocommit=True` is load-bearing, not a tuning knob. psycopg defaults to
+    autocommit=False, so the first SELECT -- assert_schema(), before anything is
+    written -- opens an implicit transaction. Every later `conn.transaction()`
+    then nests INSIDE it as a mere savepoint, committing nothing, and the
+    connection context manager rolls the entire run back when an exception
+    leaves the block: the published headlines, the run row, and the error
+    written to explain the failure.
+
+    That is the exact opposite of the two guarantees this module claims -- one
+    committed transaction per headline, and a ledger that records failures. With
+    autocommit on, each `transaction()` block is a real top-level transaction
+    that commits at its own exit.
+    """
+    with psycopg.connect(database_url, row_factory=dict_row, autocommit=True) as conn:
         yield conn
 
 

@@ -50,6 +50,13 @@ def is_valid_new_style(identifier: str) -> bool:
         return False
     if len(sequence) != digits_for(yymm):
         return False
+    # The version suffix was captured and never checked, so "2401.01234v0" was
+    # accepted. arXiv versions start at v1, so v0 is malformed -- and a malformed
+    # entry in id_list comes back as an empty feed, shaped exactly like a real
+    # miss. Catching it here is the whole reason this function exists.
+    version = match.group(4)
+    if version is not None and int(version[1:]) < 1:
+        return False
     return int(sequence) >= 1
 
 

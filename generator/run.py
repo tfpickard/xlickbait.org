@@ -13,7 +13,7 @@ from generator.arxiv.select import pick_fresh, pick_vintage
 from generator.config import Config
 from generator.db import PendingHeadline
 from generator.llm import RETRY_NOTE, Headline, HeadlineWriter
-from generator.truth import anchor_is_supported
+from generator.truth import anchor_is_supported, source_span
 
 
 @dataclass
@@ -67,6 +67,13 @@ def write_with_truth_gate(
             retry_note=note,
         )
         if anchor_is_supported(headline.anchor, paper.title, paper.abstract):
+            # Store the paper's spelling, not the model's. The gate permits case
+            # and whitespace drift, so without this the anchor shown to readers
+            # under "Fact check" could differ from the source -- while the footer
+            # promises it is quoted verbatim.
+            exact = source_span(headline.anchor, paper.title, paper.abstract)
+            if exact is not None and exact != headline.anchor:
+                headline = headline.model_copy(update={"anchor": exact})
             return headline, rejected
         rejected += 1
         note = RETRY_NOTE.format(anchor=headline.anchor)
