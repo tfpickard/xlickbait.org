@@ -18,7 +18,16 @@
 			<a href="https://creativecommons.org/publicdomain/zero/1.0/" rel="noopener">CC0 1.0</a>
 			public domain dedication. No full text or PDFs are fetched, stored, or served.
 		</p>
-		<p class="thanks">Thank you to arXiv for use of its open access interoperability.</p>
+		<!--
+			Both sentences are required. arXiv's API landing page asks products to
+			acknowledge data usage with the first; the brand guidelines specify the
+			disclaimer that follows it for products that use the API. The disclaimer
+			is doing real work here, given the section heading "FROM THE ARXIVE".
+		-->
+		<p class="thanks">
+			Thank you to arXiv for use of its open access interoperability. This service was not reviewed
+			or approved by, nor does it necessarily express or reflect the policies or opinions of, arXiv.
+		</p>
 		<p class="colophon">
 			No analytics, no cookies, no trackers. All artwork is generated from the paper identifier.
 		</p>

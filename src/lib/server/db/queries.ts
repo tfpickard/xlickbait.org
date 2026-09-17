@@ -1,4 +1,4 @@
-import { and, count, desc, eq, inArray, lte, not, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gt, inArray, lte, not, sql } from 'drizzle-orm';
 import { getDb } from './client';
 import { headlines, papers, type HeadlineKind } from './schema';
 import { decodeCursor, encodeCursor, type Cursor } from './cursor';
@@ -188,6 +188,22 @@ export async function getChumbox(
 	const span = CHUMBOX_MAX - CHUMBOX_MIN + 1;
 	const wanted = CHUMBOX_MIN + Math.floor(random() * span);
 	return shuffle(pool, random).slice(0, wanted);
+}
+
+/**
+ * When the next scheduled headline becomes visible, or null if none is pending.
+ *
+ * Served by the same `(status, publish_at desc, id desc)` index as every list
+ * query, so it is a cheap index probe rather than a scan.
+ */
+export async function nextScheduledAt(): Promise<string | null> {
+	const rows = await getDb()
+		.select({ publishAt: headlines.publishAt })
+		.from(headlines)
+		.where(and(eq(headlines.status, 'published'), gt(headlines.publishAt, sql`now()`)))
+		.orderBy(headlines.publishAt)
+		.limit(1);
+	return rows[0]?.publishAt ?? null;
 }
 
 export async function listFeedEntries(limit: number): Promise<HeadlineCard[]> {

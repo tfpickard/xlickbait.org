@@ -6,7 +6,7 @@ import {
 	type HeadlineCard,
 	type ListResult
 } from '$lib/server/db/queries';
-import { loadChumbox, setCache } from '$lib/server/page';
+import { loadChumbox, setTimeSensitiveCache } from '$lib/server/page';
 import { BREAKING_COUNT, CACHE_WINDOWS, PAGE_SIZE, VINTAGE_COUNT } from '$lib/config';
 import { TAGS } from '$lib/cache';
 
@@ -51,6 +51,6 @@ export const load: PageServerLoad = async (event) => {
 		: [...(hero ? [hero.id] : []), ...breaking.map((i) => i.id), ...vintage.map((i) => i.id)];
 	const chumbox = await loadChumbox(event, onPage, CACHE_WINDOWS.list.sMaxAge);
 
-	setCache(event, { ...CACHE_WINDOWS.list, tags: [TAGS.list] });
+	await setTimeSensitiveCache(event, CACHE_WINDOWS.list, [TAGS.list]);
 	return { paging, hero, breaking, vintage, more, chumbox };
 };

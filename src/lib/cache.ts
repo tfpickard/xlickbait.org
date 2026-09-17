@@ -80,6 +80,25 @@ export function cacheHeaders({ sMaxAge, swr, tags = [] }: CacheOptions): Record<
 	};
 }
 
+/**
+ * Shorten a cache window so it expires when the next scheduled headline goes
+ * live, rather than up to a full stale-while-revalidate window afterwards.
+ *
+ * The CDN has no concept of `now()`, so a page rendered at 10:00 with a headline
+ * scheduled for 10:01 would otherwise keep serving the pre-10:01 version until
+ * its TTL lapsed. Clamping makes the cache entry expire exactly when the content
+ * changes.
+ *
+ * Returns at least 1: a zero s-maxage would disable CDN caching entirely, and a
+ * negative one is meaningless. `nextPublishAt` is null when nothing is scheduled.
+ */
+export function clampSMaxAge(sMaxAge: number, nextPublishAt: string | null, now: Date): number {
+	if (!nextPublishAt) return sMaxAge;
+	const until = Math.floor((new Date(nextPublishAt).getTime() - now.getTime()) / 1000);
+	if (!Number.isFinite(until)) return sMaxAge;
+	return Math.max(1, Math.min(sMaxAge, until));
+}
+
 /** Headers for a response that must never be cached (404s, bad cursors). */
 export function noCacheHeaders(): Record<string, string> {
 	return {

@@ -72,6 +72,10 @@ if grep -rn '\$[0-9]' drizzle/migrations/*/migration.sql 2>/dev/null; then
 	exit 1
 fi
 
+# Same host-normalising guard the seed and reset scripts use, applied in both
+# directions: dev must not be production, and main must not be anything else.
+npx tsx scripts/check-migration-target.ts "$branch" "$url"
+
 transport="${MIGRATE_TRANSPORT:-wire}"
 if [ "$transport" = "http" ] && [ "$branch" = "main" ]; then
 	# The HTTP driver cannot open a transaction, so a failure part-way through

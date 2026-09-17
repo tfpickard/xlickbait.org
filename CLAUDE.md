@@ -25,6 +25,7 @@ hooks and nothing DB-backed is prerendered.
 | `npm run test:built`          | Build, then assert headers on the built function |
 | `npm run test:e2e`            | Playwright smoke against `netlify dev`           |
 | `npm run db:generate`         | `drizzle-kit generate` from `schema.ts`          |
+| `npm run db:check`            | `drizzle-kit check` — see Migrations             |
 | `npm run db:migrate`          | Apply migrations to **dev**                      |
 | `npm run db:seed`             | Load fixtures into dev (idempotent)              |
 | `npm run db:reset-dev`        | Truncate dev and reseed                          |
@@ -83,6 +84,17 @@ predicates by serialising a SQL node, and an `eq()` in a partial index emits
 after the migration was generated, reviewed and committed. Write such predicates
 as raw `sql` templates with literal values.
 
+`bin/migrate.sh` also runs the shared host guard in both directions: `dev` must
+not resolve to the production host, and `main` must not resolve to anything else
+— an empty `DATABASE_URL_UNPOOLED_MAIN` silently falling back would otherwise
+apply production migrations to dev.
+
+Run `npm run db:check` after generating. drizzle-kit's applied-migrations gate
+reads only the newest row (`order by created_at desc limit 1`), so a migration
+generated on a branch off an older snapshot is skipped **permanently and
+silently** — no error, nothing in the database to notice. `db:check` is what
+catches that.
+
 `MIGRATE_TRANSPORT=http` routes migrations through Neon's SQL-over-HTTP endpoint
 instead of the wire protocol, for networks that block 5432. It is **permitted
 for `dev` only** — the HTTP driver has no transactions, so a failure halfway
@@ -108,7 +120,19 @@ drizzle/migrations/           generated SQL — committed, never edited
 
 ## The read-only guarantee
 
-The web app issues only SELECTs, enforced three independent ways:
+The web app issues only SELECTs, enforced four independent ways:
+
+0. **A read-only Postgres role.** Migration `..._readonly_role` creates
+   `xlickbait_read` with `SELECT` and nothing else, plus default privileges so
+   later tables inherit it. Netlify's `DATABASE_URL` uses that role. This is the
+   outermost layer and the only one that does not live in the repository — the
+   three below are all bypassed by a compromised build or a dependency
+   postinstall script; a role without `INSERT`/`UPDATE`/`DELETE` is not.
+   The role is created `NOLOGIN`, because a committed migration must not carry a
+   password. Grant one out of band:
+   `ALTER ROLE xlickbait_read WITH LOGIN PASSWORD '<generated>';`
+
+The three in-repo layers:
 
 1. **Types.** `client.ts` keeps the Drizzle instance module-private and exports
    a handle narrowed to the select side, so `db.insert(...)` does not compile.
@@ -118,7 +142,8 @@ The web app issues only SELECTs, enforced three independent ways:
 3. **A source scan** in `tests/unit/no-writes.test.ts`, which is the only layer
    that catches a write smuggled through a raw SQL template string.
 
-All three are verified to fire. Do not weaken any of them to make a change pass.
+All three in-repo layers are verified to fire against a deliberate violation. Do
+not weaken any of them to make a change pass.
 
 ## Caching
 
@@ -195,9 +220,17 @@ post-deploy check: curl production twice and assert `Cache-Status` moves from
 
 Metadata only — title, abstract, authors, categories, dates. Never PDFs or full
 text. arXiv's API terms require **no** attribution (metadata is CC0 1.0) and
-forbid implying endorsement; they _request_ the acknowledgement
-"Thank you to arXiv for use of its open access interoperability", which the
-footer carries. The rate limit is one request every three seconds on a single
+forbid implying endorsement. Attribution **is** expected, though: the API landing
+page asks products to acknowledge data usage, and the brand guidelines give the
+required form for products using the API. The footer carries **both** sentences,
+verbatim:
+
+> Thank you to arXiv for use of its open access interoperability. This service
+> was not reviewed or approved by, nor does it necessarily express or reflect the
+> policies or opinions of, arXiv.
+
+The disclaimer is load-bearing given the "FROM THE ARχIVE" section heading — the
+rule is not to brand a project in a way implying endorsement. The rate limit is one request every three seconds on a single
 connection — that governs Phase 2.
 
 ## Stack notes

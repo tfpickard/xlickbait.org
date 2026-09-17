@@ -76,15 +76,15 @@ A supplied `DATABASE_URL` with no Neon credentials is schema work: complete it w
 
 New projects are created in AWS regions. Prefer pooled `DATABASE_URL` for application traffic.
 
-| Need | Use |
-| --- | --- |
-| Login, users, sessions (no existing provider) | Auth (`auth: true`) |
-| Files, uploads, blobs (no existing object store) | Object Storage |
-| HTTP APIs, cron, WebSocket, SSE, long-running agents | Functions querying Postgres |
-| LLM calls | AI Gateway |
-| SQL, schema, inspect, search | `neon-postgres` |
-| Existing PostgREST / Supabase database client | Data API (`dataApi` in `neon.ts`) |
-| Generic REST endpoints | Function or existing handler, not Data API |
+| Need                                                 | Use                                        |
+| ---------------------------------------------------- | ------------------------------------------ |
+| Login, users, sessions (no existing provider)        | Auth (`auth: true`)                        |
+| Files, uploads, blobs (no existing object store)     | Object Storage                             |
+| HTTP APIs, cron, WebSocket, SSE, long-running agents | Functions querying Postgres                |
+| LLM calls                                            | AI Gateway                                 |
+| SQL, schema, inspect, search                         | `neon-postgres`                            |
+| Existing PostgREST / Supabase database client        | Data API (`dataApi` in `neon.ts`)          |
+| Generic REST endpoints                               | Function or existing handler, not Data API |
 
 ## Neon Documentation
 
@@ -283,21 +283,21 @@ npm i @neon/config
 
 ```typescript
 // neon.ts
-import { defineConfig } from "@neon/config/v1";
+import { defineConfig } from '@neon/config/v1';
 
 export default defineConfig({
-  aiGateway: true,
-  buckets: {
-    images: {
-      access: "private",
-    },
-  },
-  functions: {
-    imagegen: {
-      name: "AI SDK image agent",
-      source: "src/index.ts",
-    },
-  },
+	aiGateway: true,
+	buckets: {
+		images: {
+			access: 'private'
+		}
+	},
+	functions: {
+		imagegen: {
+			name: 'AI SDK image agent',
+			source: 'src/index.ts'
+		}
+	}
 });
 ```
 
@@ -308,10 +308,10 @@ Every project ships with Lakebase Postgres; `neon.ts` also declares Auth, Functi
 ```typescript
 // neon.ts
 export default defineConfig({
-  auth: true,
-  functions: {},
-  buckets: {},
-  aiGateway: true, // see the neon-ai-gateway skill
+	auth: true,
+	functions: {},
+	buckets: {},
+	aiGateway: true // see the neon-ai-gateway skill
 });
 ```
 
@@ -351,29 +351,29 @@ Beyond services, `neon.ts` can program what configuration _new_ branches receive
 
 ```typescript
 // neon.ts
-import { defineConfig } from "@neon/config/v1";
+import { defineConfig } from '@neon/config/v1';
 
 export default defineConfig({
-  auth: true,
-  branch: (branch) => {
-    if (branch.exists) {
-      // leave existing branches untouched
-      return {};
-    }
-    if (branch.name.startsWith("dev")) {
-      return {
-        ttl: "7d", // clean up the branch after 7 days
-        postgres: {
-          computeSettings: {
-            autoscalingLimitMinCu: 0.25, // scale to zero
-            autoscalingLimitMaxCu: 1, // keep it cheap
-            suspendTimeout: "5m",
-          },
-        },
-      };
-    }
-    return {};
-  },
+	auth: true,
+	branch: (branch) => {
+		if (branch.exists) {
+			// leave existing branches untouched
+			return {};
+		}
+		if (branch.name.startsWith('dev')) {
+			return {
+				ttl: '7d', // clean up the branch after 7 days
+				postgres: {
+					computeSettings: {
+						autoscalingLimitMinCu: 0.25, // scale to zero
+						autoscalingLimitMaxCu: 1, // keep it cheap
+						suspendTimeout: '5m'
+					}
+				}
+			};
+		}
+		return {};
+	}
 });
 ```
 
@@ -385,7 +385,7 @@ Because `neon.ts` is TypeScript, the compiler catches invalid infrastructure bef
 
 ```typescript
 export default defineConfig({
-  dataApi: true, // type error: `dataApi` (default authProvider 'neon') requires Neon Auth
+	dataApi: true // type error: `dataApi` (default authProvider 'neon') requires Neon Auth
 });
 ```
 
@@ -397,10 +397,10 @@ export default defineConfig({ auth: true, dataApi: true });
 
 // 2. Or verify a third-party IdP instead of Neon Auth:
 export default defineConfig({
-  dataApi: {
-    authProvider: "external",
-    jwksUrl: "https://your-idp/.well-known/jwks.json",
-  },
+	dataApi: {
+		authProvider: 'external',
+		jwksUrl: 'https://your-idp/.well-known/jwks.json'
+	}
 });
 ```
 

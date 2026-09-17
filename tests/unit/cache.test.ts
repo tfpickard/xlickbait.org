@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TAGS, cacheHeaders, cacheTagValue, noCacheHeaders } from '$lib/cache';
+import { TAGS, cacheHeaders, cacheTagValue, clampSMaxAge, noCacheHeaders } from '$lib/cache';
 
 describe('cacheHeaders', () => {
 	const headers = cacheHeaders({ sMaxAge: 60, swr: 300, tags: [TAGS.list] });
@@ -72,5 +72,36 @@ describe('noCacheHeaders', () => {
 
 	it('attaches no tags, because there is nothing to purge', () => {
 		expect(noCacheHeaders()['cache-tag']).toBeUndefined();
+	});
+});
+
+describe('clampSMaxAge', () => {
+	const now = new Date('2026-09-17T12:00:00.000Z');
+
+	it('leaves the window alone when nothing is scheduled', () => {
+		expect(clampSMaxAge(60, null, now)).toBe(60);
+	});
+
+	it('shortens the window to the next scheduled headline', () => {
+		// The CDN has no concept of now(), so without this a headline scheduled 20
+		// seconds out would stay invisible for the full 60-second window.
+		expect(clampSMaxAge(60, '2026-09-17T12:00:20.000Z', now)).toBe(20);
+	});
+
+	it('does not lengthen a window for a distant headline', () => {
+		expect(clampSMaxAge(60, '2026-09-18T12:00:00.000Z', now)).toBe(60);
+	});
+
+	it('never returns zero, which would disable CDN caching entirely', () => {
+		expect(clampSMaxAge(60, '2026-09-17T12:00:00.000Z', now)).toBe(1);
+		expect(clampSMaxAge(60, '2026-09-17T11:00:00.000Z', now)).toBe(1);
+	});
+
+	it('ignores an unparseable timestamp rather than caching for one second forever', () => {
+		expect(clampSMaxAge(60, 'not a date', now)).toBe(60);
+	});
+
+	it('handles the Postgres timestamptz spelling', () => {
+		expect(clampSMaxAge(60, '2026-09-17 12:00:30+00', now)).toBe(30);
 	});
 });
