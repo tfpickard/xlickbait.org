@@ -471,10 +471,13 @@ true until the image pass, which runs after the commit and takes the better part
 of a minute. A reader landing in that window caches the permalink with the SVG
 fallback and the default OG card, and keeps it for `sMaxAge + swr`.
 
-Backfilling is `python -m generator images`. It purges `h:<id>` as well as the
-list tags, which `tags_for` deliberately does not: a freshly published headline
-has never been cached anywhere, while a backfilled one has been sitting on cached
-pages for hours rendering the SVG.
+Backfilling is `python -m generator images`, and it purges `site` -- deliberately
+blunt, for exactly the reason `hide` is. A backfilled headline also appears in
+the chumbox of OTHER headlines' permalinks, and those responses carry only their
+own `h:<id>`, so purging this headline's own tags would leave it rendering the
+SVG over there for up to `sMaxAge + swr`. Backfill is rare and manual; the cost
+of a whole-site purge is nothing next to the point of running it. A run that
+illustrated nothing still sends no request at all.
 
 ### Purging
 

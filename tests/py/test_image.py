@@ -118,12 +118,23 @@ class TestPromptBuilding:
         assert len(load_style("terse").split()) < 60
 
     def test_the_default_style_states_its_guardrails_positively(self):
-        # A prohibition list puts the forbidden things into the conditioning and
-        # they turn up in the output. The guardrails describe what IS true of the
-        # scene instead.
+        """A prohibition conditions on the thing it forbids.
+
+        This checks word-boundary negations rather than an allowlist of exact
+        phrases. The allowlist version passed while the file said "cropped so no
+        face is legible" and "invented props, not data" -- negating the two
+        things the guardrails most wanted absent, which is the precise failure
+        the rule exists to avoid, sitting inside the prompt that claims to
+        follow it.
+        """
+        import re
+
         terse = load_style("terse").lower()
-        for negation in ("no logos", "do not", "without any", "never"):
-            assert negation not in terse
+        found = re.findall(
+            r"\b(no|not|never|without|avoid|avoids|exclude|excludes|omit|omits|nothing|none)\b",
+            terse,
+        )
+        assert found == [], f"the default prompt negates rather than describes: {found}"
 
     def test_the_photo_style_forbids_lettering(self):
         # The whole reason that style exists. If this instruction is ever edited

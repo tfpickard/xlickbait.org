@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 
 from generator import config as config_module
 from generator import db, purge
+from generator import tags as tag_names
 from generator.arxiv.client import ArxivClient
 from generator.db import SchemaMismatch
 from generator.image import ImagePainter
@@ -258,12 +259,28 @@ def command_images(args: argparse.Namespace) -> int:
     # with an <img> whose URL was returning 404. Nothing invalidates those pages
     # on its own, so the purge is the half of this command that makes the other
     # half visible.
-    tags = tags_for_illustrations(result.illustrated)
-    if tags and cfg.can_purge:
+    # Deliberately blunt, for the same reason `hide` is: a backfilled headline
+    # also appears in the chumbox of OTHER headlines' permalinks, and those
+    # pages carry only their own `h:<id>` tag. Purging this headline's tags
+    # would leave it rendering the SVG fallback over there for up to
+    # sMaxAge + swr. Backfill is a rare, manual command, so the cost of a whole-
+    # site purge is nothing next to the point of running it.
+    #
+    # `tags_for_illustrations` is still what decides WHETHER to purge: it
+    # returns [] when nothing was illustrated, and an empty list must never
+    # become an absent `cache_tags` key, which is what purges the entire site by
+    # accident rather than on purpose.
+    if not result.illustrated:
+        return 0
+    tags = [tag_names.SITE]
+    if cfg.can_purge:
         assert cfg.netlify_purge_token and cfg.netlify_site_id
         made = purge.purge(tags, token=cfg.netlify_purge_token, site_id=cfg.netlify_site_id)
-        print(f"purged {len(tags)} cache tags in {made} request(s)")
-    elif tags:
+        print(
+            f"purged the whole site in {made} request(s) "
+            "(a backfilled headline also sits in other pages' chumboxes)"
+        )
+    else:
         print("no purge credentials configured; images appear as the CDN TTL lapses")
     return 0
 
@@ -279,8 +296,6 @@ def command_hide(args: argparse.Namespace) -> int:
     print(f"headline {args.id} is now hidden")
 
     if cfg.can_purge:
-        from generator import tags as tag_names
-
         assert cfg.netlify_purge_token and cfg.netlify_site_id
         # Deliberately blunt: `site` and not just this headline's own tags. A
         # hidden headline also sits in the chumbox of other headlines' permalinks,

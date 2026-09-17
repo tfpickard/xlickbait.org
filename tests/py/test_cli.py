@@ -204,3 +204,82 @@ class TestRunWithoutIllustrations:
         # And the tags it always sent are still there.
         assert tag_names.LIST in tags
         assert tag_names.FEED in tags
+
+
+class TestBackfillPurge:
+    """Regression: a backfilled headline also sits in other pages' chumboxes.
+
+    `tags_for_illustrations` covers the headline's own permalink and the lists
+    it appears on. It cannot cover the OTHER permalinks whose chumbox includes
+    it, because those responses carry only their own `h:<id>` tag — the same
+    blind spot `hide` already documents and answers the same way.
+    """
+
+    @pytest.fixture
+    def backfill(self, monkeypatch):
+        from datetime import UTC, datetime
+
+        from generator.db import Illustratable
+        from generator.run import IllustrationResult
+
+        calls: list[list[str]] = []
+
+        @contextlib.contextmanager
+        def fake_connect(url: str) -> Iterator[object]:
+            yield object()
+
+        target = Illustratable(
+            headline_id=7,
+            headline="H",
+            dek="d",
+            primary_category="hep-ex",
+            categories=["hep-ex"],
+            publish_at=datetime(2026, 9, 17, 12, 0, tzinfo=UTC),
+        )
+        monkeypatch.setattr(cli.db, "connect", fake_connect)
+        monkeypatch.setattr(cli.db, "assert_schema", lambda conn, images=False: None)
+        monkeypatch.setattr(cli.db, "headlines_missing_images", lambda conn, *, limit: [target])
+        monkeypatch.setattr(cli, "_painter", lambda cfg: contextlib.nullcontext(object()))
+        monkeypatch.setattr(
+            cli,
+            "illustrate",
+            lambda painter, targets, *, store: IllustrationResult(
+                made=1, spent_usd=0.02, illustrated=list(targets)
+            ),
+        )
+        monkeypatch.setattr(
+            cli.purge, "purge", lambda tags, *, token, site_id: calls.append(list(tags)) or 1
+        )
+        return calls
+
+    def _args(self, **overrides) -> argparse.Namespace:
+        base = dict(limit=10, dry_run=False)
+        base.update(overrides)
+        return argparse.Namespace(**base)
+
+    def test_purges_the_whole_site(self, env, backfill, monkeypatch):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+
+        assert cli.command_images(self._args()) == 0
+        assert backfill == [[tag_names.SITE]], (
+            "the headline's own tags leave it showing the SVG in other pages' chumboxes"
+        )
+
+    def test_illustrating_nothing_sends_no_request_at_all(self, env, backfill, monkeypatch):
+        """The `purge.py` footgun, one level up.
+
+        An absent `cache_tags` key purges the entire site; an empty list purges
+        nothing. Now that this path hardcodes `site`, the guard against sending
+        it when nothing changed has to live here.
+        """
+        from generator.run import IllustrationResult
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+        monkeypatch.setattr(
+            cli,
+            "illustrate",
+            lambda painter, targets, *, store: IllustrationResult(made=0, failed=1),
+        )
+
+        assert cli.command_images(self._args()) == 0
+        assert backfill == [], "nothing was illustrated; nothing may be purged"
