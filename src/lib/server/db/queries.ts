@@ -1,6 +1,6 @@
 import { and, count, desc, eq, gt, inArray, lte, not, sql } from 'drizzle-orm';
 import { getDb } from './client';
-import { headlines, papers, type HeadlineKind } from './schema';
+import { headlineImages, headlines, papers, type HeadlineKind } from './schema';
 import { decodeCursor, encodeCursor, type Cursor } from './cursor';
 import { CHUMBOX_MAX, CHUMBOX_MIN } from '$lib/config';
 import { seededRandom, shuffle } from '$lib/rng';
@@ -28,8 +28,34 @@ const headlineColumns = {
 	title: papers.title,
 	primaryCategory: papers.primaryCategory,
 	categories: papers.categories,
-	absUrl: papers.absUrl
+	absUrl: papers.absUrl,
+	/**
+	 * Whether this headline has an illustration -- NOT the illustration.
+	 *
+	 * A text column from the left join rather than a computed boolean, on the
+	 * same principle as the `to_char` in `listArchiveDays`: `sql<boolean>` is a
+	 * type assertion with no runtime validation, and what a driver makes of a
+	 * Postgres boolean is the driver's business. A nullable text column is
+	 * unambiguous in every driver, and `toCard` turns it into the flag.
+	 *
+	 * The bytes themselves are never selected here. They live in their own table
+	 * precisely so a hundred kilobytes per row cannot end up on the front page by
+	 * accident; `getHeadlineImage` is the only thing that reads them.
+	 */
+	imageMime: headlineImages.mime
 } as const;
+
+/**
+ * Every query selecting `headlineColumns` must also carry this join.
+ *
+ * `leftJoin`, never `innerJoin`: an illustration is optional by design, so
+ * joining it the other way would silently drop every headline that does not have
+ * one yet -- which, on the day this ships, is all of them. It is a probe against
+ * the image table's primary key, so it costs one index lookup per row and reads
+ * no bytes: `mime` is a short text column, and the blob beside it is never
+ * touched.
+ */
+const IMAGE_JOIN_ON = eq(headlineImages.headlineId, headlines.id);
 
 export interface HeadlineCard {
 	id: number;
@@ -44,6 +70,22 @@ export interface HeadlineCard {
 	primaryCategory: string;
 	categories: string[];
 	absUrl: string;
+	/** True when `/i/<id>` will serve a picture; false means the SVG fallback. */
+	hasImage: boolean;
+}
+
+type HeadlineRow = { imageMime: string | null } & Omit<HeadlineCard, 'hasImage'>;
+
+/**
+ * The one place a row becomes a card.
+ *
+ * Every query funnels through this so `hasImage` cannot be true in one code path
+ * and undefined in another -- which, in a Svelte component, renders as the SVG
+ * fallback silently rather than as an error.
+ */
+function toCard(row: HeadlineRow): HeadlineCard {
+	const { imageMime, ...rest } = row;
+	return { ...rest, hasImage: imageMime !== null };
 }
 
 /**
@@ -106,12 +148,13 @@ export async function listHeadlines(options: ListOptions): Promise<ListResult> {
 		.select(headlineColumns)
 		.from(headlines)
 		.innerJoin(papers, eq(headlines.arxivId, papers.arxivId))
+		.leftJoin(headlineImages, IMAGE_JOIN_ON)
 		.where(and(...filters))
 		.orderBy(desc(headlines.publishAt), desc(headlines.id))
 		.limit(limit + 1);
 
 	const hasMore = rows.length > limit;
-	const items = (hasMore ? rows.slice(0, limit) : rows) as HeadlineCard[];
+	const items = (hasMore ? rows.slice(0, limit) : rows).map(toCard);
 	const last = items.at(-1);
 
 	return {
@@ -132,9 +175,11 @@ export async function getHeadline(id: number): Promise<HeadlineCard | null> {
 		.select(headlineColumns)
 		.from(headlines)
 		.innerJoin(papers, eq(headlines.arxivId, papers.arxivId))
+		.leftJoin(headlineImages, IMAGE_JOIN_ON)
 		.where(and(isLive(), eq(headlines.id, id)))
 		.limit(1);
-	return (rows[0] as HeadlineCard | undefined) ?? null;
+	const row = rows[0];
+	return row ? toCard(row) : null;
 }
 
 export interface ArchiveDay {
@@ -176,13 +221,16 @@ export async function getChumbox(
 	const filters = [isLive()];
 	if (excludeIds.length > 0) filters.push(not(inArray(headlines.id, [...excludeIds])));
 
-	const pool = (await getDb()
-		.select(headlineColumns)
-		.from(headlines)
-		.innerJoin(papers, eq(headlines.arxivId, papers.arxivId))
-		.where(and(...filters))
-		.orderBy(desc(headlines.publishAt), desc(headlines.id))
-		.limit(POOL)) as HeadlineCard[];
+	const pool = (
+		await getDb()
+			.select(headlineColumns)
+			.from(headlines)
+			.innerJoin(papers, eq(headlines.arxivId, papers.arxivId))
+			.leftJoin(headlineImages, IMAGE_JOIN_ON)
+			.where(and(...filters))
+			.orderBy(desc(headlines.publishAt), desc(headlines.id))
+			.limit(POOL)
+	).map(toCard);
 
 	const random = seededRandom(seed);
 	const span = CHUMBOX_MAX - CHUMBOX_MIN + 1;
@@ -221,4 +269,44 @@ export async function listCategories(): Promise<{ category: string; count: numbe
 		.groupBy(papers.primaryCategory)
 		.orderBy(desc(count()));
 	return rows.map((r) => ({ category: r.category, count: Number(r.count) }));
+}
+
+export interface StoredImage {
+	/** The bytes, base64 encoded by Postgres. */
+	base64: string;
+	mime: string;
+	/** `length(bytes)` as stored by the generator, for the integrity check. */
+	byteSize: number;
+}
+
+/**
+ * The bytes behind `/i/<id>`, for a headline that is currently visible.
+ *
+ * `isLive()` is applied here rather than left to the route, so a hidden headline
+ * takes its picture down with it. The kill switch is the whole reason: hiding a
+ * headline whose illustration kept serving from a guessable URL would be a
+ * takedown that only covered the words.
+ *
+ * Base64 rather than the raw `bytea`, asked for in SQL. What a driver returns
+ * for a binary column is a driver decision -- neon-http renders Postgres's
+ * `\x<hex>` escape, which is twice the bytes over the wire and one more format
+ * to parse correctly while serving an image. `encode()` makes the wire format
+ * this code's decision instead, and `Buffer.from(..., 'base64')` is the
+ * single, well-specified step back.
+ */
+export async function getHeadlineImage(id: number): Promise<StoredImage | null> {
+	const rows = await getDb()
+		.select({
+			base64: sql<string>`encode(${headlineImages.bytes}, 'base64')`,
+			mime: headlineImages.mime,
+			byteSize: headlineImages.byteSize
+		})
+		.from(headlineImages)
+		.innerJoin(headlines, IMAGE_JOIN_ON)
+		.where(and(isLive(), eq(headlineImages.headlineId, id)))
+		.limit(1);
+
+	const row = rows[0];
+	if (!row) return null;
+	return { base64: row.base64, mime: row.mime, byteSize: Number(row.byteSize) };
 }

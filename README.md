@@ -16,5 +16,11 @@ npm run db:seed
 npx netlify dev --offline
 ```
 
+Headlines can carry a generated illustration, served from `/i/<id>`. It is
+optional at every level: without an `OPENROUTER_API_KEY` the generator publishes
+as normal and the site draws its own deterministic SVG thumbnails, which remain
+the fallback for any headline whose image did not work out. `npm run db:seed`
+loads fixture images so the path is exercised locally without a key.
+
 See [CLAUDE.md](./CLAUDE.md) for commands, branch and environment layout, the
 cache tag vocabulary, and the conventions this codebase relies on.

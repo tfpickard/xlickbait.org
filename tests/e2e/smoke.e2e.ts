@@ -5,9 +5,10 @@ import { expect, test } from '@playwright/test';
  * headline point at a real arXiv paper, and does the page pull anything from
  * off-site?
  *
- * The last one is a standing requirement rather than a nicety. All artwork is
- * generated from the paper identifier, so a single external image request would
- * mean something is reaching the network that should not be.
+ * The last one is a standing requirement rather than a nicety. Artwork is either
+ * generated from the paper identifier or served from this origin at `/i/<id>`,
+ * so a single external image request would mean something is reaching the
+ * network that should not be. There is no hotlinking and no stock photography.
  */
 
 const ARXIV_ABS = /^https:\/\/arxiv\.org\/abs\/\d{4}\.\d{4,5}$/;
@@ -40,9 +41,47 @@ test.describe('xlickbait smoke', () => {
 			expect(href, `link ${i} is not a canonical abs URL`).toMatch(ARXIV_ABS);
 		}
 
-		// Artwork is inline SVG; nothing should be fetched as an image.
-		expect(await page.locator('img').count()).toBe(0);
+		// Artwork is either an inline SVG or an <img> served from this origin at
+		// `/i/<id>`. This used to assert there were no <img> elements at all, which
+		// was a proxy for the real rule -- nothing comes from off-site -- and stopped
+		// being true when headlines gained illustrations. The rule itself has not
+		// moved, so assert it directly instead.
+		const images = page.locator('img');
+		const imageCount = await images.count();
+		const sources: string[] = [];
+		for (let i = 0; i < imageCount; i++) {
+			const src = new URL((await images.nth(i).getAttribute('src')) ?? '', page.url());
+			expect(src.origin, 'an image is loaded from another origin').toBe(
+				new URL(baseURL as string).origin
+			);
+			expect(src.pathname, 'an image is not a headline illustration').toMatch(/^\/i\/\d+$/);
+			sources.push(src.href);
+		}
+
+		// Whatever the mix, every card has artwork of one kind or the other.
+		const svgCount = await page.locator('.thumb svg').count();
+		expect(imageCount + svgCount).toBeGreaterThan(5);
+
+		// The hero image is eager, so the browser really has decoded it by now. A
+		// naturalWidth of 0 is how a 404 or a broken bytea round trip presents.
+		if (imageCount > 0) {
+			const hero = page.locator('img[loading="eager"]').first();
+			await expect
+				.poll(() => hero.evaluate((el: HTMLImageElement) => el.naturalWidth))
+				.toBeGreaterThan(0);
+		}
+
+		// Check the rest by fetching them rather than by waiting for the viewport:
+		// the others are `loading="lazy"` and a headless page never scrolls to them,
+		// so asserting on their naturalWidth would assert on lazy loading instead of
+		// on the route.
 		expect(offenders()).toEqual([]);
+		for (const src of sources) {
+			const response = await page.request.get(src);
+			expect(response.status(), `${src} did not serve`).toBe(200);
+			expect(response.headers()['content-type']).toBe('image/webp');
+			expect((await response.body()).byteLength).toBeGreaterThan(0);
+		}
 	});
 
 	test('the fact check works without JavaScript', async ({ browser, baseURL }) => {

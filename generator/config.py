@@ -11,6 +11,12 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+from generator import image as image_module
+
+# What OpenRouter's image endpoint accepts for `quality`. Models without the knob
+# ignore it; `auto` means "send nothing and let the provider decide".
+IMAGE_QUALITIES = frozenset({"auto", "low", "medium", "high"})
+
 # arXiv asks for one request every three seconds across all the machines under
 # your control, and returns no rate-limit headers. The client self-governs.
 ARXIV_MIN_INTERVAL_SECONDS = 3.0
@@ -22,6 +28,15 @@ DEFAULT_USER_AGENT = (
     "xlickbait/0.1 (+https://xlickbait.org; satire site linking arXiv abstracts; "
     "contact: hello@xlickbait.org)"
 )
+
+
+# Illustrations go through OpenRouter's dedicated image endpoint. The default is
+# the cheapest model there that renders legible lettering, which is the whole
+# requirement: at `quality: "low"` a 3:2 image bills around 270 output image
+# tokens at $8/M, so roughly $0.002 apiece -- a few dollars a year at this
+# publishing rate. Swap it with XLICKBAIT_IMAGE_MODEL; anything on
+# https://openrouter.ai/api/v1/images/models works.
+DEFAULT_IMAGE_MODEL = "openai/gpt-image-1-mini"
 
 
 def _int_env(name: str, default: int) -> int:
@@ -68,6 +83,36 @@ def _non_negative(name: str, value: int) -> int:
     return value
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    """A switch, read the way people actually type switches.
+
+    Anything unrecognised is an error rather than a silent `False`: the one that
+    matters is XLICKBAIT_IMAGES, and "I set it and nothing happened" is a much
+    worse afternoon than "it refused to start".
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise SystemExit(f"{name} must be a boolean (1/0, true/false, yes/no, on/off), got {raw!r}")
+
+
+def _in_range(name: str, value: int, *, low: int, high: int) -> int:
+    if not low <= value <= high:
+        raise SystemExit(f"{name} must be between {low} and {high}, got {value}")
+    return value
+
+
+def _non_negative_float(name: str, value: float) -> float:
+    if value < 0:
+        raise SystemExit(f"{name} must be zero or greater, got {value}")
+    return value
+
+
 def _list_env(name: str, default: list[str]) -> list[str]:
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
@@ -107,9 +152,30 @@ class Config:
     netlify_purge_token: str | None = None
     netlify_site_id: str | None = None
 
+    # ---- illustrations, via OpenRouter -----------------------------------
+    # All optional. Without a key the generator publishes exactly as it always
+    # has and the site draws its deterministic SVG thumbnails instead, which is
+    # why none of these can fail a run.
+    openrouter_api_key: str | None = None
+    images_enabled: bool = True
+    image_model: str = DEFAULT_IMAGE_MODEL
+    image_style: str = "tabloid"
+    image_aspect_ratio: str = "3:2"
+    image_quality: str = "low"
+    image_max_width: int = 1200
+    image_max_bytes: int = 400_000
+    image_webp_quality: int = 82
+    image_budget_usd: float = 0.25
+    image_assumed_cost_usd: float = 0.01
+    image_timeout: float = 180.0
+
     @property
     def can_purge(self) -> bool:
         return bool(self.netlify_purge_token and self.netlify_site_id)
+
+    @property
+    def can_illustrate(self) -> bool:
+        return bool(self.images_enabled and self.openrouter_api_key)
 
 
 # Fresh count is clamped: fewer than two is not a front page, and more than five
@@ -155,6 +221,26 @@ def load_for_hide() -> Config:
     )
 
 
+def load_for_images() -> Config:
+    """Configuration for the image backfill: database, purge and the image knobs.
+
+    Same reasoning as `load_for_hide`. Backfilling pictures for headlines that
+    already exist calls neither arXiv nor Anthropic, so a missing
+    ANTHROPIC_API_KEY or a mistyped XLICKBAIT_ID_BATCH must not be able to stop
+    it. The generation fields below are inert placeholders on this path.
+    """
+    return Config(
+        database_url=_database_url(),
+        anthropic_api_key="",
+        model="",
+        fresh_count=0,
+        vintage_count=0,
+        netlify_purge_token=os.environ.get("NETLIFY_PURGE_TOKEN") or None,
+        netlify_site_id=os.environ.get("NETLIFY_SITE_ID") or None,
+        **image_settings(),
+    )
+
+
 def load(
     *,
     fresh: int | None = None,
@@ -190,4 +276,60 @@ def load(
         truth_gate_retries=_int_env("XLICKBAIT_TRUTH_RETRIES", 2),
         netlify_purge_token=os.environ.get("NETLIFY_PURGE_TOKEN") or None,
         netlify_site_id=os.environ.get("NETLIFY_SITE_ID") or None,
+        **image_settings(),
     )
+
+
+def image_settings() -> dict[str, object]:
+    """The illustration knobs, resolved and validated.
+
+    Split out because `images` (the backfill command) needs exactly these and
+    none of the arXiv or Anthropic settings -- backfilling pictures for headlines
+    that already exist must not be blocked by a malformed XLICKBAIT_ID_BATCH, for
+    the same reason `load_for_hide` exists.
+    """
+    style = os.environ.get("XLICKBAIT_IMAGE_STYLE", "tabloid").strip() or "tabloid"
+    if style not in image_module.STYLES:
+        raise SystemExit(
+            f"XLICKBAIT_IMAGE_STYLE must be one of "
+            f"{', '.join(sorted(image_module.STYLES))}, got {style!r}"
+        )
+    quality = os.environ.get("XLICKBAIT_IMAGE_QUALITY", "low").strip() or "low"
+    if quality not in IMAGE_QUALITIES:
+        raise SystemExit(
+            f"XLICKBAIT_IMAGE_QUALITY must be one of "
+            f"{', '.join(sorted(IMAGE_QUALITIES))}, got {quality!r}"
+        )
+
+    return {
+        "openrouter_api_key": os.environ.get("OPENROUTER_API_KEY", "").strip() or None,
+        "images_enabled": _bool_env("XLICKBAIT_IMAGES", True),
+        "image_model": os.environ.get("XLICKBAIT_IMAGE_MODEL", DEFAULT_IMAGE_MODEL).strip()
+        or DEFAULT_IMAGE_MODEL,
+        "image_style": style,
+        "image_aspect_ratio": os.environ.get("XLICKBAIT_IMAGE_ASPECT", "3:2").strip() or "3:2",
+        "image_quality": quality,
+        "image_max_width": _positive(
+            "XLICKBAIT_IMAGE_MAX_WIDTH", _int_env("XLICKBAIT_IMAGE_MAX_WIDTH", 1200)
+        ),
+        "image_max_bytes": _positive(
+            "XLICKBAIT_IMAGE_MAX_BYTES", _int_env("XLICKBAIT_IMAGE_MAX_BYTES", 400_000)
+        ),
+        "image_webp_quality": _in_range(
+            "XLICKBAIT_IMAGE_WEBP_QUALITY",
+            _int_env("XLICKBAIT_IMAGE_WEBP_QUALITY", 82),
+            low=1,
+            high=100,
+        ),
+        # A ceiling on one run's image spend, not a target. It exists so a typo in
+        # XLICKBAIT_IMAGE_MODEL -- say, a slug that bills $0.12 an image instead
+        # of $0.002 -- costs pennies rather than running unattended on cron.
+        "image_budget_usd": _non_negative_float(
+            "XLICKBAIT_IMAGE_BUDGET_USD", _float_env("XLICKBAIT_IMAGE_BUDGET_USD", 0.25)
+        ),
+        "image_assumed_cost_usd": _non_negative_float(
+            "XLICKBAIT_IMAGE_ASSUMED_COST_USD",
+            _float_env("XLICKBAIT_IMAGE_ASSUMED_COST_USD", 0.01),
+        ),
+        "image_timeout": _float_env("XLICKBAIT_IMAGE_TIMEOUT", 180.0),
+    }

@@ -45,6 +45,48 @@ describe('cacheHeaders', () => {
 	});
 });
 
+describe('cacheHeaders with immutable', () => {
+	it('lets the browser hold the response, unlike every other page', () => {
+		const headers = cacheHeaders({ sMaxAge: 31_536_000, swr: 86_400, immutable: true });
+		// Everything else on this site is content whose whole point is that it can
+		// change without a rebuild, so the browser is told to revalidate. `/i/<id>`
+		// is written once at a URL derived from the id; there is no later revision
+		// to miss.
+		expect(headers['cache-control']).toBe('public, max-age=3600');
+	});
+
+	it('keeps the browser window short enough that a takedown means something', () => {
+		// Not a year, and not the `immutable` directive. `hide` is a takedown, and
+		// one that leaves the picture in browser caches until next autumn is not a
+		// takedown. The CDN gets the long window because the CDN can be purged.
+		const headers = cacheHeaders({ sMaxAge: 31_536_000, swr: 86_400, immutable: true });
+		const maxAge = Number(/max-age=(\d+)/.exec(headers['cache-control'] ?? '')?.[1]);
+		expect(maxAge).toBeLessThanOrEqual(86_400);
+		expect(headers['cache-control']).not.toContain('immutable');
+	});
+
+	it('still emits both CDN header spellings and the tags', () => {
+		const headers = cacheHeaders({
+			sMaxAge: 31_536_000,
+			swr: 86_400,
+			tags: ['h:7'],
+			immutable: true
+		});
+		expect(headers['cdn-cache-control']).toBe(
+			'public, s-maxage=31536000, stale-while-revalidate=86400'
+		);
+		expect(headers['netlify-cdn-cache-control']).toContain('durable');
+		expect(headers['cache-tag']).toBe('site,h:7');
+		expect(headers['netlify-cache-tag']).toBe('site,h:7');
+	});
+
+	it('defaults to off, so no existing response changed', () => {
+		expect(cacheHeaders({ sMaxAge: 60, swr: 300 })['cache-control']).toBe(
+			'public, max-age=0, must-revalidate'
+		);
+	});
+});
+
 describe('cacheTagValue', () => {
 	it('de-duplicates and comma-separates without spaces', () => {
 		expect(cacheTagValue(['list', 'list', 'site'])).toBe('site,list');

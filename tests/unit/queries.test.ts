@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import {
 	getChumbox,
 	getHeadline,
+	getHeadlineImage,
 	listArchiveDays,
 	listHeadlines,
 	nextScheduledAt,
@@ -250,6 +251,63 @@ describeDb('queries against the seeded dev branch', () => {
 				expect(item.absUrl).toBe(`https://arxiv.org/abs/${item.arxivId}`);
 				expect(item.title.length).toBeGreaterThan(0);
 				expect(Array.isArray(item.categories)).toBe(true);
+			}
+		});
+	});
+
+	describe('illustrations', () => {
+		it('reports hasImage as a real boolean on every card', () => {
+			// Not "truthy". `hasImage` crosses the load boundary into a Svelte
+			// component, where `undefined` renders as the SVG fallback without
+			// complaining -- the exact failure this is here to make loud.
+			for (const item of all) {
+				expect(typeof item.hasImage).toBe('boolean');
+			}
+		});
+
+		it('the left join drops nothing', async () => {
+			// An innerJoin here would silently hide every headline without a
+			// picture, which on the day this shipped was all of them.
+			expect(all.some((h) => h.hasImage)).toBe(true);
+			expect(all.some((h) => !h.hasImage)).toBe(true);
+		});
+
+		it('round-trips the bytes through base64 intact', async () => {
+			const withImage = all.find((h) => h.hasImage) as HeadlineCard;
+			const image = await getHeadlineImage(withImage.id);
+
+			expect(image).not.toBeNull();
+			expect(image?.mime).toBe('image/webp');
+
+			const bytes = Buffer.from(image!.base64, 'base64');
+			// The stored byte_size is written by the writer, not computed by
+			// Postgres, precisely so this comparison can catch a truncation that a
+			// binary column would otherwise hide completely.
+			expect(bytes.byteLength).toBe(image?.byteSize);
+			// RIFF....WEBP: proof the bytes survived the encode/decode, not just
+			// that some bytes came back.
+			expect(bytes.subarray(0, 4).toString('ascii')).toBe('RIFF');
+			expect(bytes.subarray(8, 12).toString('ascii')).toBe('WEBP');
+		});
+
+		it('returns null for a headline that has no image', async () => {
+			const without = all.find((h) => !h.hasImage) as HeadlineCard;
+			expect(await getHeadlineImage(without.id)).toBeNull();
+		});
+
+		it('returns null for an id that does not exist', async () => {
+			expect(await getHeadlineImage(9_999_999)).toBeNull();
+		});
+
+		it('will not serve the image of a headline that is not live', async () => {
+			// The kill switch is the whole reason. Hiding a headline whose picture
+			// kept serving from a guessable URL is a takedown that only covers the
+			// words. Same rule for a future-dated row, which has not been published
+			// yet in any sense that matters.
+			const live = new Set(all.map((h) => h.id));
+			const probes = [...Array(60).keys()].map((n) => n + 1).filter((id) => !live.has(id));
+			for (const id of probes) {
+				expect(await getHeadlineImage(id)).toBeNull();
 			}
 		});
 	});

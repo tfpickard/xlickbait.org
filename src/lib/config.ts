@@ -38,7 +38,17 @@ export const CACHE_WINDOWS = {
 	/** Archive index: counts per day, changes slowly. */
 	archive: { sMaxAge: 300, swr: 1800 },
 	/** Atom feed. */
-	feed: { sMaxAge: 300, swr: 1800 }
+	feed: { sMaxAge: 300, swr: 1800 },
+	/**
+	 * Headline illustrations.
+	 *
+	 * A year, because the bytes at `/i/<id>` are written once and the URL is
+	 * derived from the id: there is no later revision for a reader to miss. This
+	 * is the one response on the site the browser is allowed to keep as well (see
+	 * `CacheOptions.immutable`), which matters because it is also the only one
+	 * that costs a hundred kilobytes.
+	 */
+	image: { sMaxAge: 31_536_000, swr: 86_400 }
 } as const;
 
 /** Canonical arXiv abs URL for a paper. Never a PDF, never full text. */

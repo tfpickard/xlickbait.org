@@ -21,7 +21,7 @@
 <article class="card" class:compact>
 	<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- outbound link to arxiv.org; absUrl() builds it from the identifier so a malformed abs_url column cannot redirect a reader somewhere unexpected -->
 	<a class="thumb-link" href={absUrl(item.arxivId)} tabindex="-1" aria-hidden="true">
-		<Thumb arxivId={item.arxivId} />
+		<Thumb id={item.id} arxivId={item.arxivId} hasImage={item.hasImage} />
 	</a>
 
 	<div class="body">

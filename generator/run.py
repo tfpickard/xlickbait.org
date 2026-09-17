@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -11,7 +12,8 @@ from generator.arxiv.atom import Paper
 from generator.arxiv.client import ArxivClient
 from generator.arxiv.select import pick_fresh, pick_vintage
 from generator.config import Config
-from generator.db import PendingHeadline
+from generator.db import Illustratable, PendingHeadline
+from generator.image import BudgetExhausted, ImageError, ImagePainter, RenderedImage
 from generator.llm import RETRY_NOTE, Headline, HeadlineWriter
 from generator.truth import anchor_is_supported, source_span
 
@@ -176,4 +178,112 @@ def tags_for(pending: list[PendingHeadline], headline_ids: list[int]) -> list[st
         for category in item.paper.categories:
             out.add(tag_names.category(category))
     del headline_ids
+    return sorted(out)
+
+
+@dataclass
+class IllustrationResult:
+    """What one pass of image generation achieved. Failures are never fatal."""
+
+    made: int = 0
+    failed: int = 0
+    spent_usd: float = 0.0
+    notes: list[str] = field(default_factory=list)
+    illustrated: list[Illustratable] = field(default_factory=list)
+
+
+def illustrate(
+    painter: ImagePainter,
+    targets: Sequence[Illustratable],
+    *,
+    store: Callable[[int, RenderedImage], None],
+) -> IllustrationResult:
+    """Draw and store a picture for each target, surviving every failure.
+
+    Takes a `store` callback rather than a connection so this is testable without
+    a database, the same way `generate()` is testable without one.
+
+    Two failure modes, deliberately handled differently:
+
+    - `ImageError` is per-headline. The headline keeps its deterministic SVG, a
+      note is recorded, and the loop moves on. An image model having a bad
+      minute must not cost the site a headline it has already published.
+    - `BudgetExhausted` is per-run and terminal. Once the spend ceiling is
+      reached, every remaining call would fail the same way, so the loop stops
+      instead of generating one note per remaining headline.
+
+    Anything that is not an `ImageError` propagates: a bug in this code, a
+    `MemoryError`, a KeyboardInterrupt on a cron box being shut down -- none of
+    those are "the picture didn't work out", and swallowing them here is how a
+    generator ends up reporting success forever.
+    """
+    result = IllustrationResult()
+    for target in targets:
+        try:
+            image = painter.paint(
+                headline=target.headline,
+                dek=target.dek,
+                category=target.primary_category,
+            )
+        except BudgetExhausted as exc:
+            result.notes.append(str(exc))
+            break
+        except ImageError as exc:
+            result.failed += 1
+            result.notes.append(f"no image for headline {target.headline_id}: {exc}")
+            continue
+
+        # Storing is not in the try: a failed write is a database problem, and
+        # database problems are the caller's to decide about, not something to
+        # log as "no image for headline 7" and continue past.
+        store(target.headline_id, image)
+        result.made += 1
+        result.illustrated.append(target)
+
+    result.spent_usd = painter.spent_usd
+    return result
+
+
+def targets_for(
+    pending: Sequence[PendingHeadline], headline_ids: Sequence[int]
+) -> list[Illustratable]:
+    """Turn a just-published batch into image targets.
+
+    The ids only exist after the insert, which is why this is a separate step
+    from `generate()` rather than part of a `PendingHeadline`.
+    """
+    return [
+        Illustratable(
+            headline_id=headline_id,
+            headline=item.headline.headline,
+            dek=item.headline.dek,
+            primary_category=item.paper.primary_category,
+            categories=list(item.paper.categories),
+            publish_at=item.publish_at,
+        )
+        for item, headline_id in zip(pending, headline_ids, strict=True)
+    ]
+
+
+def tags_for_illustrations(illustrated: Sequence[Illustratable]) -> list[str]:
+    """Cache tags to purge after illustrating headlines that were ALREADY published.
+
+    Unlike `tags_for`, this DOES include `h:<id>`: a backfilled headline has a
+    permalink that has been cached for hours with an `<img>` pointing at a URL
+    that was 404ing, and nothing about adding the row invalidates that page on
+    its own.
+
+    Every list the headline appears on carries the image too, so the day page,
+    the category pages and the front page all have to go with it. Correct for a
+    run that publishes nothing and only backfills, which is the interesting case:
+    `tags_for` returns [] there and would leave the new pictures invisible.
+    """
+    if not illustrated:
+        return []
+    out = {tag_names.LIST, tag_names.ARCHIVE}
+    for target in illustrated:
+        out.add(tag_names.headline(target.headline_id))
+        out.add(tag_names.day(target.publish_at.astimezone(UTC).strftime("%Y-%m-%d")))
+        for category in target.categories:
+            out.add(tag_names.category(category))
     return sorted(out)

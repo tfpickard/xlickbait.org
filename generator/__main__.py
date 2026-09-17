@@ -1,6 +1,7 @@
 """Command line entry point.
 
 python -m generator run [--fresh N] [--vintage M] [--stagger HOURS] [--dry-run]
+python -m generator images [--limit N]
 python -m generator hide <id>
 """
 
@@ -16,8 +17,38 @@ from generator import config as config_module
 from generator import db, purge
 from generator.arxiv.client import ArxivClient
 from generator.db import SchemaMismatch
+from generator.image import ImagePainter
 from generator.llm import HeadlineWriter
-from generator.run import generate, tags_for
+from generator.run import generate, illustrate, tags_for, tags_for_illustrations, targets_for
+
+
+def _painter(cfg: config_module.Config) -> ImagePainter:
+    assert cfg.openrouter_api_key
+    return ImagePainter(
+        api_key=cfg.openrouter_api_key,
+        model=cfg.image_model,
+        style=cfg.image_style,
+        aspect_ratio=cfg.image_aspect_ratio,
+        quality=cfg.image_quality,
+        max_width=cfg.image_max_width,
+        max_bytes=cfg.image_max_bytes,
+        webp_quality=cfg.image_webp_quality,
+        budget_usd=cfg.image_budget_usd,
+        assumed_cost_usd=cfg.image_assumed_cost_usd,
+        timeout=cfg.image_timeout,
+    )
+
+
+def _report_images(result: object) -> None:
+    from generator.run import IllustrationResult
+
+    assert isinstance(result, IllustrationResult)
+    print(
+        f"illustrated {result.made} headlines with {result.spent_usd:.4f} USD "
+        f"of image generation ({result.failed} failed)"
+    )
+    for note in result.notes:
+        print(f"  note: {note}")
 
 
 def _print_pending(result: object) -> None:
@@ -37,12 +68,15 @@ def _print_pending(result: object) -> None:
 
 def command_run(args: argparse.Namespace) -> int:
     cfg = config_module.load(fresh=args.fresh, vintage=args.vintage)
+    # --no-images turns the whole thing off for one invocation, so a run can go
+    # out while an image model is misbehaving without editing the cron env file.
+    illustrating = cfg.can_illustrate and not args.no_images
     rng = random.Random()
     now = datetime.now(UTC)
 
     with db.connect(cfg.database_url) as conn:
         try:
-            db.assert_schema(conn)
+            db.assert_schema(conn, images=illustrating)
         except SchemaMismatch as exc:
             print(str(exc), file=sys.stderr)
             return 1
@@ -92,6 +126,18 @@ def command_run(args: argparse.Namespace) -> int:
                 headline_ids.append(db.upsert(conn, item, model=cfg.model))
                 persisted += 1
 
+            # After the headlines are committed, never before. An image is
+            # decoration on something that is already published; generating one
+            # first would mean a slow or failing image model delaying -- or, on
+            # an unhandled error, losing -- the thing people actually came for.
+            if illustrating and headline_ids:
+                with _painter(cfg) as painter:
+                    images = illustrate(
+                        painter,
+                        targets_for(result.pending, headline_ids),
+                        store=lambda hid, img: db.upsert_image(conn, hid, img),
+                    )
+
             assert run_id is not None
             db.finish_run(
                 conn,
@@ -123,6 +169,12 @@ def command_run(args: argparse.Namespace) -> int:
         f"{result.rejected} truth-gate rejections"
     )
     _print_pending(result)
+    if images is not None:
+        _report_images(images)
+    elif cfg.can_illustrate:
+        print("images skipped (--no-images)")
+    else:
+        print("no OPENROUTER_API_KEY; headlines keep their generated SVG thumbnails")
 
     if cfg.can_purge:
         tags = tags_for(result.pending, headline_ids)
@@ -131,6 +183,63 @@ def command_run(args: argparse.Namespace) -> int:
         print(f"purged {len(tags)} cache tags in {made} request(s)")
     else:
         print("no purge credentials configured; new headlines appear as the CDN TTL lapses")
+    return 0
+
+
+def command_images(args: argparse.Namespace) -> int:
+    """Backfill illustrations for headlines that do not have one.
+
+    Uses `load_for_images` rather than the full loader for the same reason
+    `hide` does: this needs a database, a key and the image knobs, and must not
+    be blocked by an arXiv or Anthropic setting it will never read.
+    """
+    cfg = config_module.load_for_images()
+    if not cfg.can_illustrate:
+        print(
+            "no OPENROUTER_API_KEY set (or XLICKBAIT_IMAGES is off); nothing to do",
+            file=sys.stderr,
+        )
+        return 1
+
+    with db.connect(cfg.database_url) as conn:
+        try:
+            db.assert_schema(conn, images=True)
+        except SchemaMismatch as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        if args.limit < 1:
+            print("--limit must be a positive integer", file=sys.stderr)
+            return 1
+        targets = db.headlines_missing_images(conn, limit=args.limit)
+        if not targets:
+            print("every published headline already has an image")
+            return 0
+
+        if args.dry_run:
+            print(f"DRY RUN -- would illustrate {len(targets)} headlines. Nothing was written.")
+            for target in targets:
+                print(f"  [{target.headline_id}] {target.headline}")
+            return 0
+
+        with _painter(cfg) as painter:
+            result = illustrate(
+                painter, targets, store=lambda hid, img: db.upsert_image(conn, hid, img)
+            )
+
+    _report_images(result)
+
+    # Unlike a fresh run, these headlines have been on cached pages for a while
+    # with an <img> whose URL was returning 404. Nothing invalidates those pages
+    # on its own, so the purge is the half of this command that makes the other
+    # half visible.
+    tags = tags_for_illustrations(result.illustrated)
+    if tags and cfg.can_purge:
+        assert cfg.netlify_purge_token and cfg.netlify_site_id
+        made = purge.purge(tags, token=cfg.netlify_purge_token, site_id=cfg.netlify_site_id)
+        print(f"purged {len(tags)} cache tags in {made} request(s)")
+    elif tags:
+        print("no purge credentials configured; images appear as the CDN TTL lapses")
     return 0
 
 
@@ -183,7 +292,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print what would be inserted and write nothing at all",
     )
+    run.add_argument(
+        "--no-images",
+        action="store_true",
+        help="publish without illustrations, whatever the environment says",
+    )
     run.set_defaults(func=command_run)
+
+    images = sub.add_parser("images", help="backfill illustrations for headlines without one")
+    images.add_argument(
+        "--limit", type=int, default=10, help="how many headlines to illustrate (default 10)"
+    )
+    images.add_argument(
+        "--dry-run", action="store_true", help="list what would be illustrated and write nothing"
+    )
+    images.set_defaults(func=command_images)
 
     hide = sub.add_parser("hide", help="hide a headline (the kill switch)")
     hide.add_argument("id", type=int)

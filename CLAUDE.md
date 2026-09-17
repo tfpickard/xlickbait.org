@@ -36,18 +36,20 @@ hooks and nothing DB-backed is prerendered.
 
 ### Generator (Python)
 
-| Command                                 | What it does                                                          |
-| --------------------------------------- | --------------------------------------------------------------------- |
-| `python -m generator run`               | Pick papers, write headlines, publish, purge                          |
-| `python -m generator run --dry-run`     | Print what it would insert; writes **nothing at all**                 |
-| `python -m generator hide <id>`         | Kill switch: hide one headline (there is no web admin); purges `site` |
-| `bin/run.sh [args]`                     | Cron wrapper; loads env from outside the repo                         |
-| `pytest`                                | The generator suite (arXiv and Anthropic mocked)                      |
-| `ruff check . && ruff format --check .` | Lint                                                                  |
-| `shellcheck bin/*.sh`                   | Shell lint                                                            |
+| Command                                  | What it does                                                             |
+| ---------------------------------------- | ------------------------------------------------------------------------ |
+| `python -m generator run`                | Pick papers, write headlines, publish, purge                             |
+| `python -m generator run --dry-run`      | Print what it would insert; writes **nothing at all**                    |
+| `python -m generator images [--limit N]` | Backfill illustrations for headlines that have none; purges what changed |
+| `python -m generator hide <id>`          | Kill switch: hide one headline (there is no web admin); purges `site`    |
+| `bin/run.sh [args]`                      | Cron wrapper; loads env from outside the repo                            |
+| `pytest`                                 | The generator suite (arXiv and Anthropic mocked)                         |
+| `ruff check . && ruff format --check .`  | Lint                                                                     |
+| `shellcheck bin/*.sh`                    | Shell lint                                                               |
 
-`run` takes `--fresh N` (clamped 2-5), `--vintage M`, and `--stagger HOURS` to
-spread `publish_at` randomly across the next N hours. `pytest` picks up extra
+`run` takes `--fresh N` (clamped 2-5), `--vintage M`, `--stagger HOURS` to
+spread `publish_at` randomly across the next N hours, and `--no-images` to
+publish without illustrations whatever the environment says. `pytest` picks up extra
 suites when `XLICKBAIT_TEST_DB_URL` (a throwaway Postgres with the migrations
 applied) or `NEON_API_KEY` + `NEON_PROJECT_ID` are set; both skip cleanly
 otherwise.
@@ -145,7 +147,8 @@ src/lib/server/db/queries.ts  every SELECT the site makes
 src/lib/server/db/cursor.ts   opaque (publish_at, id) pagination cursor
 src/lib/server/db/guard.ts    production-host guard for destructive scripts
 src/lib/cache.ts              cache tag vocabulary + the header helper
-src/lib/thumb.ts              deterministic SVG thumbnails
+src/lib/thumb.ts              deterministic SVG thumbnails (the fallback)
+src/routes/i/[id=id]/         serves one headline's illustration from Postgres
 src/lib/{rng,slug,time,feed,config}.ts
 src/hooks.server.ts           applies cache headers to every response
 src/params/                   route matchers (yyyy, mm, dd)
@@ -167,6 +170,13 @@ The web app issues only SELECTs, enforced four independent ways:
    The role is created `NOLOGIN`, because a committed migration must not carry a
    password. Grant one out of band:
    `ALTER ROLE xlickbait_read WITH LOGIN PASSWORD '<generated>';`
+
+   That migration's `ALTER DEFAULT PRIVILEGES` was written without `FOR ROLE`,
+   so it only covers tables created by whoever ran it. **Every migration adding
+   a table the site reads must therefore carry its own explicit
+   `GRANT SELECT ... TO xlickbait_read`**, as `..._aberrant_falcon` does for
+   `headline_images`. Getting this wrong fails as a permission error on
+   production only.
 
 The three in-repo layers:
 
@@ -212,6 +222,9 @@ The Phase 2 generator purges by these exact strings. Keep the two in sync.
 | `h:<id>`           | one headline's permalink                          |
 | `day:<YYYY-MM-DD>` | one UTC day page                                  |
 | `cat:<category>`   | one category page                                 |
+
+`h:<id>` covers the headline's illustration at `/i/<id>` as well as its
+permalink. There is no separate image tag: the two always change together.
 
 Purge: `POST https://api.netlify.com/api/v1/purge` with
 `Authorization: Bearer <token>` and `{"site_id": "...", "cache_tags": [...]}`.
@@ -296,9 +309,12 @@ generator/arxiv/atom.py    parsing, withdrawal heuristics, miss reconciliation
 generator/arxiv/select.py  fresh and vintage picking
 generator/truth.py         the truth gate
 generator/llm.py           Anthropic call with structured output
+generator/image.py         OpenRouter image call, transcode, size and spend ceilings
 generator/db.py            psycopg 3 writes + the schema assertion
 generator/purge.py         Netlify cache-tag purge
 generator/prompts/headline_system.md   the style guide, loaded at runtime
+generator/prompts/image_tabloid.md     art direction, headline typeset into the art
+generator/prompts/image_photo.md       art direction, no lettering at all
 ```
 
 ### Rate limiting
@@ -367,6 +383,59 @@ leaves the block: the published headlines, the run row, and the error written to
 explain the failure, all together. That is the precise opposite of the two things
 this module promises, one committed transaction per headline and a ledger that
 records failures.
+
+### Illustrations
+
+Optional, and optional all the way down. Without `OPENROUTER_API_KEY` the
+generator publishes exactly as it did before and the site draws the deterministic
+SVG from `src/lib/thumb.ts` -- which is still the fallback for any single
+headline whose image failed. **Nothing in `image.py` may abort a publish.** The
+image is decoration on something that is already committed, which is also why it
+is generated _after_ the headline insert rather than before.
+
+`ImageError` is per-headline: note it, keep the SVG, move on. `BudgetExhausted`
+is per-run and stops the loop, because every remaining call would fail the same
+way. Anything else -- a failing database write, a `MemoryError` -- propagates.
+"The picture didn't work out" and "the database is unwell" must not log the same.
+
+**The bytes live in Postgres**, in `headline_images`, served by `/i/<id>`. That
+is a deliberate trade: the whole system stays one Neon account with one
+write credential, held only by the generator, and the site needs no new
+service and no new secret to render an image. The costs are an origin round trip
+per image per CDN node, and a storage budget you have to actually watch.
+
+So the ceilings are not tuning:
+
+- **Transcoding is mandatory.** The cheap models return PNG at 1-2 MB. Pillow
+  re-encodes to WebP and walks the quality down until the result fits
+  `XLICKBAIT_IMAGE_MAX_BYTES` (default 400 KB). At roughly seven headlines a
+  day that is tens of megabytes a year rather than a gigabyte.
+- **The ceiling rejects, it never truncates.** An image that will not fit is
+  dropped and the headline keeps its SVG.
+- **`byte_size` is written by Python, not computed by Postgres**, so the route
+  can compare it against what it decoded. A truncated `bytea` is otherwise
+  completely silent: the reader gets a broken image icon and nothing is logged.
+- **The spend ceiling is per run**, enforced inside `ImagePainter`. When
+  OpenRouter does not report `usage.cost`, the call is billed
+  `XLICKBAIT_IMAGE_ASSUMED_COST_USD` rather than zero -- a budget that assumes
+  free whenever it cannot see the bill is not a budget.
+
+Two things the route has to keep doing. It applies the site's full visibility
+rule, so `hide` takes the picture down with the words rather than leaving it
+serving from a guessable URL. And it is the only response on the site the
+_browser_ may cache (`CacheOptions.immutable`) -- one hour, not a year, so a
+takedown still means something; the CDN gets the long window because the CDN can
+be purged.
+
+`generator/db.py` asserts `headline_images` **only when images are on**, so a
+generator pointed at a database from before that migration still publishes
+headlines. Turning images on against such a database fails at startup, before
+spending money on something it cannot store.
+
+Backfilling is `python -m generator images`. It purges `h:<id>` as well as the
+list tags, which `tags_for` deliberately does not: a freshly published headline
+has never been cached anywhere, while a backfilled one has been sitting on cached
+pages for hours rendering the SVG.
 
 ### Purging
 
