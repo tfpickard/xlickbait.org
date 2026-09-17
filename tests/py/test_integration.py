@@ -7,6 +7,7 @@ truncates between tests.
 
 from __future__ import annotations
 
+import base64
 import os
 import random
 from datetime import UTC, datetime, timedelta
@@ -16,8 +17,9 @@ import pytest
 from generator import db
 from generator.arxiv.atom import Paper
 from generator.db import PendingHeadline, SchemaMismatch
+from generator.image import RenderedImage
 from generator.llm import Headline
-from generator.run import tags_for
+from generator.run import illustrate, tags_for
 
 TEST_DB = os.environ.get("XLICKBAIT_TEST_DB_URL", "").strip()
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="XLICKBAIT_TEST_DB_URL is not set")
@@ -29,7 +31,10 @@ NOW = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
 def conn():
     with db.connect(TEST_DB) as connection:
         with connection.cursor() as cur:
-            cur.execute("TRUNCATE headlines, papers, generator_runs RESTART IDENTITY CASCADE")
+            cur.execute(
+                "TRUNCATE headline_images, headlines, papers, generator_runs "
+                "RESTART IDENTITY CASCADE"
+            )
         connection.commit()
         yield connection
 
@@ -70,11 +75,22 @@ class TestSchemaAssertion:
     def test_fails_loudly_when_the_schema_has_moved(self, conn):
         # The generator never runs DDL, so a drifted schema must stop the run
         # rather than produce half-written rows at three in the morning.
+        #
+        # Renamed back in a `finally`, NOT by rolling back. `db.connect` opens
+        # the connection with autocommit=True -- which is load-bearing, because
+        # without it every `conn.transaction()` degrades to a savepoint and a
+        # failed run rolls back its own ledger. The cost is that there is no
+        # open transaction here to roll back: the ALTER commits the instant it
+        # runs, and a `conn.rollback()` is a silent no-op that leaves the column
+        # renamed for every test after this one in the file.
         with conn.cursor() as cur:
             cur.execute("ALTER TABLE headlines RENAME COLUMN anchor TO anchor_renamed")
-        with pytest.raises(SchemaMismatch, match="anchor"):
-            db.assert_schema(conn)
-        conn.rollback()
+        try:
+            with pytest.raises(SchemaMismatch, match="anchor"):
+                db.assert_schema(conn)
+        finally:
+            with conn.cursor() as cur:
+                cur.execute("ALTER TABLE headlines RENAME COLUMN anchor_renamed TO anchor")
 
 
 class TestWriting:
@@ -103,7 +119,9 @@ class TestWriting:
 
         with pytest.raises(psycopg.errors.UniqueViolation):
             db.upsert(conn, make_pending("2401.00002"), model="m")
-        conn.rollback()
+        # No rollback: `db.upsert` wraps its own `conn.transaction()`, which the
+        # exception already rolled back, and on an autocommit connection there is
+        # no outer transaction left for `conn.rollback()` to act on anyway.
 
     def test_a_hidden_headline_frees_the_paper_for_a_new_one(self, conn):
         first = db.upsert(conn, make_pending("2401.00003"), model="m")
@@ -193,3 +211,171 @@ def test_rng_seeded_runs_are_reproducible():
     a = stagger_times(10, 4, random.Random(1), NOW)
     b = stagger_times(10, 4, random.Random(1), NOW)
     assert a == b
+
+
+def webp_bytes(width: int = 320, height: int = 200) -> bytes:
+    """A real WebP, encoded the way the generator encodes one."""
+    import io
+
+    from PIL import Image
+
+    png = io.BytesIO()
+    Image.new("RGB", (width, height), (30, 20, 60)).save(png, format="PNG")
+    from generator.image import transcode
+
+    data, _, _ = transcode(png.getvalue(), max_width=width, max_bytes=400_000, quality=82)
+    return data
+
+
+def rendered(data: bytes) -> RenderedImage:
+    return RenderedImage(
+        data=data,
+        mime="image/webp",
+        width=320,
+        height=200,
+        model="microsoft/mai-image-2.6-flash",
+        prompt="a prompt",
+        cost_usd=0.002,
+    )
+
+
+class TestIllustrations:
+    def _publish(
+        self, conn, arxiv_id: str, *, status: str = "published", offset_hours: int = -1
+    ) -> int:
+        paper = make_paper(arxiv_id)
+        pending = PendingHeadline(
+            paper=paper,
+            headline=Headline(
+                headline=f"Headline for {arxiv_id}",
+                dek="d",
+                anchor="bolometer array",
+                actual_point="p",
+            ),
+            kind="fresh",
+            publish_at=datetime.now(UTC) + timedelta(hours=offset_hours),
+        )
+        headline_id = db.upsert(conn, pending, model="m")
+        if status != "published":
+            with conn.cursor() as cur:
+                cur.execute("UPDATE headlines SET status = %s WHERE id = %s", (status, headline_id))
+        return headline_id
+
+    def test_bytes_survive_the_round_trip_through_base64(self, conn):
+        # This is the one thing about storing images in Postgres that would be
+        # invisible if it broke: a truncated bytea comes back as a broken image
+        # icon with nothing in any log. The site reads the column as
+        # `encode(bytes,'base64')` rather than trusting a driver's rendering of
+        # a binary column, and this asserts that decision actually round-trips.
+        data = webp_bytes()
+        headline_id = self._publish(conn, "0000.00001")
+        db.upsert_image(conn, headline_id, rendered(data))
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT encode(bytes,'base64') AS b64, byte_size, mime "
+                "FROM headline_images WHERE headline_id = %s",
+                (headline_id,),
+            )
+            row = cur.fetchone()
+
+        assert row is not None
+        decoded = base64.b64decode(row["b64"])
+        assert decoded == data
+        assert row["byte_size"] == len(data)
+        assert row["mime"] == "image/webp"
+        assert decoded[:4] == b"RIFF" and decoded[8:12] == b"WEBP"
+
+    def test_re_illustrating_replaces_rather_than_erroring(self, conn):
+        headline_id = self._publish(conn, "0000.00001")
+        db.upsert_image(conn, headline_id, rendered(webp_bytes(320, 200)))
+        replacement = webp_bytes(400, 250)
+        db.upsert_image(conn, headline_id, rendered(replacement))
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) AS n, max(byte_size) AS size FROM headline_images "
+                "WHERE headline_id = %s",
+                (headline_id,),
+            )
+            row = cur.fetchone()
+        assert row["n"] == 1
+        assert row["size"] == len(replacement)
+
+    def test_hiding_a_headline_hides_its_picture(self, conn):
+        # The kill switch has to cover the image too, or a takedown only removes
+        # the words while the illustration keeps serving from a guessable URL.
+        headline_id = self._publish(conn, "0000.00001")
+        db.upsert_image(conn, headline_id, rendered(webp_bytes()))
+        db.hide(conn, headline_id)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1 FROM headline_images i JOIN headlines h ON i.headline_id = h.id
+                 WHERE h.status = 'published' AND h.publish_at <= now()
+                   AND i.headline_id = %s
+                """,
+                (headline_id,),
+            )
+            assert cur.fetchone() is None
+
+    def test_deleting_a_headline_takes_its_image_with_it(self, conn):
+        headline_id = self._publish(conn, "0000.00001")
+        db.upsert_image(conn, headline_id, rendered(webp_bytes()))
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM headlines WHERE id = %s", (headline_id,))
+            cur.execute(
+                "SELECT count(*) AS n FROM headline_images WHERE headline_id = %s", (headline_id,)
+            )
+            assert cur.fetchone()["n"] == 0
+
+    def test_the_backfill_query_skips_hidden_but_keeps_future_dated(self, conn):
+        # A headline scheduled for later today is exactly the one worth
+        # illustrating now, before anyone can see it. A hidden one is a takedown,
+        # and spending money on it would be absurd.
+        live = self._publish(conn, "0000.00001")
+        future = self._publish(conn, "0000.00002", offset_hours=24)
+        hidden = self._publish(conn, "0000.00003", status="hidden")
+
+        ids = {t.headline_id for t in db.headlines_missing_images(conn, limit=50)}
+        assert {live, future} <= ids
+        assert hidden not in ids
+
+        db.upsert_image(conn, live, rendered(webp_bytes()))
+        ids_after = {t.headline_id for t in db.headlines_missing_images(conn, limit=50)}
+        assert live not in ids_after
+        assert future in ids_after
+
+    def test_illustrate_writes_through_to_the_database(self, conn):
+        class Painter:
+            spent_usd = 0.004
+
+            def paint(self, *, headline, dek, category) -> RenderedImage:
+                del headline, dek, category
+                return rendered(webp_bytes())
+
+        self._publish(conn, "0000.00001")
+        self._publish(conn, "0000.00002")
+        targets = db.headlines_missing_images(conn, limit=50)
+
+        result = illustrate(
+            Painter(), targets, store=lambda hid, img: db.upsert_image(conn, hid, img)
+        )
+
+        assert result.made == 2
+        assert db.headlines_missing_images(conn, limit=50) == []
+
+    def test_a_schema_without_the_image_table_refuses_only_when_images_are_on(self, conn):
+        # The additive-migration rule from CLAUDE.md, made testable: an older
+        # database still publishes headlines, and only asking it to store a
+        # picture is refused.
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE headline_images RENAME TO headline_images_stashed")
+        try:
+            db.assert_schema(conn)  # must not raise
+            with pytest.raises(SchemaMismatch, match="headline_images"):
+                db.assert_schema(conn, images=True)
+        finally:
+            with conn.cursor() as cur:
+                cur.execute("ALTER TABLE headline_images_stashed RENAME TO headline_images")

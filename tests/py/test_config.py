@@ -119,3 +119,110 @@ class TestVintageCount:
     def test_zero_still_means_disabled(self, monkeypatch):
         monkeypatch.setenv("XLICKBAIT_VINTAGE", "0")
         assert config_module.load().vintage_count == 0
+
+
+class TestIllustrationsRequireATakedownPath:
+    """Regression: `/i/<id>` is cached for a year, so `hide` needs a purge.
+
+    Without purge credentials `hide` only flips the database row and waits for
+    the CDN entry to lapse. For HTML that is about an hour; for an illustration
+    it is twelve months, during which the CDN never re-runs the visibility
+    check and the picture of a taken-down headline stays reachable.
+    """
+
+    def _env(self, monkeypatch, **overrides) -> None:
+        monkeypatch.setenv("XLICKBAIT_DB_URL", "postgresql://u:p@host/db")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        for key in ("OPENROUTER_API_KEY", "NETLIFY_PURGE_TOKEN", "NETLIFY_SITE_ID"):
+            monkeypatch.delenv(key, raising=False)
+        for key, value in overrides.items():
+            monkeypatch.setenv(key, value)
+
+    def test_no_purge_credentials_means_no_images(self, monkeypatch):
+        self._env(monkeypatch, OPENROUTER_API_KEY="sk-or-test")
+        cfg = config_module.load()
+        assert cfg.can_illustrate is False
+        assert "NETLIFY_PURGE_TOKEN" in (cfg.illustration_blocker or "")
+
+    def test_a_half_configured_purge_is_not_a_purge(self, monkeypatch):
+        # can_purge needs both; one alone must not unlock images.
+        self._env(monkeypatch, OPENROUTER_API_KEY="sk-or-test", NETLIFY_PURGE_TOKEN="t")
+        assert config_module.load().can_illustrate is False
+
+    def test_images_run_once_a_purge_path_exists(self, monkeypatch):
+        self._env(
+            monkeypatch,
+            OPENROUTER_API_KEY="sk-or-test",
+            NETLIFY_PURGE_TOKEN="t",
+            NETLIFY_SITE_ID="s",
+        )
+        cfg = config_module.load()
+        assert cfg.can_illustrate is True
+        assert cfg.illustration_blocker is None
+
+    def test_publishing_is_never_blocked_by_any_of_this(self, monkeypatch):
+        # Illustrations are decoration. Nothing about them may stop a run, so
+        # this reports a reason rather than raising.
+        self._env(monkeypatch, OPENROUTER_API_KEY="sk-or-test")
+        cfg = config_module.load()
+        assert cfg.database_url and cfg.anthropic_api_key
+
+    def test_the_blocker_names_the_actual_cause(self, monkeypatch):
+        self._env(monkeypatch)
+        assert "OPENROUTER_API_KEY" in (config_module.load().illustration_blocker or "")
+        self._env(monkeypatch, OPENROUTER_API_KEY="sk-or-test", XLICKBAIT_IMAGES="0")
+        assert "XLICKBAIT_IMAGES" in (config_module.load().illustration_blocker or "")
+
+
+class TestTheAssumedCostCannotDisableTheCeiling:
+    def test_zero_is_rejected(self, monkeypatch):
+        # Zero passes a non-negative check and then makes the spend ceiling
+        # never bind on the missing-usage.cost path it exists to guard.
+        monkeypatch.setenv("XLICKBAIT_DB_URL", "postgresql://u:p@host/db")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        monkeypatch.setenv("XLICKBAIT_IMAGE_ASSUMED_COST_USD", "0")
+        with pytest.raises(SystemExit, match="greater than zero"):
+            config_module.load()
+
+    def test_a_zero_overall_budget_is_still_allowed(self, monkeypatch):
+        # That one IS the off switch, and it stops the first call rather than
+        # none of them.
+        monkeypatch.setenv("XLICKBAIT_DB_URL", "postgresql://u:p@host/db")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        monkeypatch.setenv("XLICKBAIT_IMAGE_BUDGET_USD", "0")
+        assert config_module.load().image_budget_usd == 0.0
+
+
+class TestNonFiniteNumbersCannotDisableTheCeiling:
+    """Regression: `float()` accepts "nan", and every comparison to nan is False.
+
+    `XLICKBAIT_IMAGE_BUDGET_USD=nan` read as a configured budget and then made
+    `remaining < reserve` false forever, so the spend ceiling never bound and
+    every headline in a large `images --limit` could reach the paid endpoint.
+    `inf` does the same thing. Rejected in `_float_env`, so no float setting
+    added later inherits the hole.
+    """
+
+    @pytest.fixture
+    def base(self, monkeypatch) -> None:
+        monkeypatch.setenv("XLICKBAIT_DB_URL", "postgresql://u:p@host/db")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+    @pytest.mark.parametrize("value", ["nan", "NaN", "inf", "-inf", "Infinity"])
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "XLICKBAIT_IMAGE_BUDGET_USD",
+            "XLICKBAIT_IMAGE_ASSUMED_COST_USD",
+            "XLICKBAIT_IMAGE_TIMEOUT",
+            "XLICKBAIT_ARXIV_INTERVAL",
+        ],
+    )
+    def test_rejected_for_every_float_setting(self, base, monkeypatch, name, value):
+        monkeypatch.setenv(name, value)
+        with pytest.raises(SystemExit, match="finite"):
+            config_module.load()
+
+    def test_ordinary_numbers_still_work(self, base, monkeypatch):
+        monkeypatch.setenv("XLICKBAIT_IMAGE_BUDGET_USD", "1.5")
+        assert config_module.load().image_budget_usd == 1.5
