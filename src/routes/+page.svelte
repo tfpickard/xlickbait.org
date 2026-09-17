@@ -13,7 +13,7 @@
 	<title>{SITE_NAME} — the preprint authority</title>
 	<meta
 		name="description"
-		content="Sensational, technically true headlines about real arXiv preprints. Satire."
+		content="Sensational, technically true headlines about real arXiv preprints."
 	/>
 	<meta property="og:site_name" content={SITE_NAME} />
 	<meta property="og:title" content="{SITE_NAME} — the preprint authority" />

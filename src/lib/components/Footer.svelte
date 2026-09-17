@@ -1,15 +1,29 @@
 <footer class="footer">
 	<div class="shell">
 		<h2>About this site</h2>
+		<!--
+			The deadpan is deliberate. The site never tells a reader it is satire; the
+			joke only works if it never winks. The admission lives in README.md and
+			CLAUDE.md instead.
+
+			Two things below are NOT part of that admission and must not be trimmed as
+			"more confession". The takedown offer in the second paragraph is the
+			release valve for running real, named researchers under sensational
+			headlines. The arXiv sentences further down are required verbatim -- see
+			the comment above them.
+
+			The first paragraph is the truth gate (generator/truth.py) restated as an
+			editorial standard. Every sentence here is literally true.
+		-->
 		<p>
-			<strong>xlickbait is satire.</strong> Every headline on this site is machine-generated and deliberately
-			misses the point of the paper it links to. The headlines seize on some peripheral detail and inflate
-			it; the actual findings are summarised honestly under each "Fact check".
+			xlickbait covers new and archival preprints. Every headline is built on a detail quoted
+			verbatim from the paper's own title or abstract; that quote, and a plain summary of what the
+			paper actually found, sit under the "Fact check" on each story.
 		</p>
 		<p>
-			Every link goes to a real preprint whose authors did nothing whatsoever to deserve this.
-			Nothing here is a claim about their work, their competence, or their conduct. If you are an
-			author who would rather not be featured, say so and the headline comes down.
+			Headlines are written by a language model and are not reviewed by the authors. Every link goes
+			to the paper itself. Nothing here is a claim about any author's work, competence, or conduct.
+			Authors who would rather not be featured can say so and the headline comes down.
 		</p>
 		<p>
 			This site is <strong>not affiliated with arXiv</strong> and is not endorsed or supported by

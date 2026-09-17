@@ -38,7 +38,7 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${WIDTH}" height="${
 	<rect x="76" y="384" width="150" height="10" fill="#ffffff" opacity="0.95"/>
 	<text x="76" y="452" font-family="DejaVu Sans, FreeSans, sans-serif" font-size="30" font-weight="bold" fill="#ffffff" opacity="0.92" letter-spacing="6">THE PREPRINT AUTHORITY</text>
 	<text x="76" y="524" font-family="DejaVu Sans, FreeSans, sans-serif" font-size="27" fill="#ffffff" opacity="0.78">Technically true headlines about real arXiv preprints.</text>
-	<text x="76" y="564" font-family="DejaVu Sans, FreeSans, sans-serif" font-size="27" fill="#ffffff" opacity="0.78">Every one of them misses the point. Satire.</text>
+	<text x="76" y="564" font-family="DejaVu Sans, FreeSans, sans-serif" font-size="27" fill="#ffffff" opacity="0.78">Every detail quoted verbatim from the paper itself.</text>
 </svg>`;
 
 await mkdir('static', { recursive: true });

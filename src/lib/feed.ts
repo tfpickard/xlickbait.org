@@ -92,12 +92,12 @@ export function renderAtomFeed({ origin, items, updated }: FeedOptions): string 
 	return `<?xml version="1.0" encoding="utf-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
 	<title>${xmlSafe(SITE_NAME)}</title>
-	<subtitle>Sensational, technically true headlines about real arXiv preprints. Satire.</subtitle>
+	<subtitle>Sensational, technically true headlines about real arXiv preprints.</subtitle>
 	<id>${xmlSafe(`${origin}/`)}</id>
 	<link rel="self" type="application/atom+xml" href="${xmlSafe(selfUrl)}"/>
 	<link rel="alternate" type="text/html" href="${xmlSafe(`${origin}/`)}"/>
 	<updated>${xmlSafe(latest)}</updated>
-	<rights>Headlines are satire. Paper metadata is CC0 via arXiv. Not affiliated with arXiv.</rights>
+	<rights>Paper metadata is CC0 via arXiv. Not affiliated with arXiv.</rights>
 ${entries}
 </feed>
 `;

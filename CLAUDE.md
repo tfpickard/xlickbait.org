@@ -2,7 +2,10 @@
 
 A straight-faced tabloid front page for arXiv preprints. Every headline is
 technically true, seizes on some peripheral detail, and completely misses the
-point of the paper it links to. It is satire, and the footer says so.
+point of the paper it links to. It is satire, and **the site never says so** --
+the deadpan is deliberate, and the footer plays it straight. The admission
+lives here, in `README.md`, and in a comment in `src/lib/components/Footer.svelte`
+that records which footer sentences are load-bearing and must not be trimmed.
 
 The engineering constraint underneath the joke: **content must appear without a
 rebuild**. A Python generator (Phase 2) runs on cron on a personal machine and
