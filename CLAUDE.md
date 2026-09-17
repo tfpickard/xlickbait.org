@@ -313,7 +313,8 @@ generator/image.py         OpenRouter image call, transcode, size and spend ceil
 generator/db.py            psycopg 3 writes + the schema assertion
 generator/purge.py         Netlify cache-tag purge
 generator/prompts/headline_system.md   the style guide, loaded at runtime
-generator/prompts/image_tabloid.md     art direction, headline typeset into the art
+generator/prompts/image_terse.md        art direction, one line -- the default
+generator/prompts/image_tabloid.md     art direction, long form
 generator/prompts/image_photo.md       art direction, no lettering at all
 ```
 
@@ -386,6 +387,19 @@ records failures.
 
 ### Illustrations
 
+**The default model and the default prompt are the ones with evidence behind
+them, not the ones that read best.** `microsoft/mai-image-2.6-flash` was watched
+producing a usable tabloid front page at a measured **$0.02 and twelve seconds**
+an image -- about $50 a year here, which for the thing readers actually look at
+is not where to save $45. `openai/gpt-image-1-mini` at
+`XLICKBAIT_IMAGE_QUALITY=low` is roughly ten times cheaper and worth trying, but
+nobody has seen its output. Likewise `image_terse.md` is one line because the one
+line is what was observed working: a long brief dilutes the instruction, and a
+list of prohibitions puts the forbidden things into the conditioning, where they
+turn up in the output. Its guardrails are therefore phrased as things that ARE
+true of the scene. `image_tabloid.md` is the long-form brief for when terse needs
+steering; a test keeps the default under sixty words and free of negations.
+
 Optional, and optional all the way down. Without `OPENROUTER_API_KEY` the
 generator publishes exactly as it did before and the site draws the deterministic
 SVG from `src/lib/thumb.ts` -- which is still the fallback for any single
@@ -419,6 +433,12 @@ So the ceilings are not tuning:
   OpenRouter does not report `usage.cost`, the call is billed
   `XLICKBAIT_IMAGE_ASSUMED_COST_USD` rather than zero -- a budget that assumes
   free whenever it cannot see the bill is not a budget.
+
+The thumbnail box takes its aspect ratio from the stored `width`/`height` rather
+than from the card. A tabloid illustration carries the headline typeset across
+the top of the frame, and `object-fit: cover` into a 16/10 box crops exactly
+that off. Every generated image is requested at the same aspect, so the grid
+stays even regardless.
 
 Two things the route has to keep doing. It applies the site's full visibility
 rule, so `hide` takes the picture down with the words rather than leaving it

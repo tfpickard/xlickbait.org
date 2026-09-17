@@ -30,13 +30,22 @@ DEFAULT_USER_AGENT = (
 )
 
 
-# Illustrations go through OpenRouter's dedicated image endpoint. The default is
-# the cheapest model there that renders legible lettering, which is the whole
-# requirement: at `quality: "low"` a 3:2 image bills around 270 output image
-# tokens at $8/M, so roughly $0.002 apiece -- a few dollars a year at this
-# publishing rate. Swap it with XLICKBAIT_IMAGE_MODEL; anything on
+# Illustrations go through OpenRouter's dedicated image endpoint. Swap the model
+# with XLICKBAIT_IMAGE_MODEL; anything on
 # https://openrouter.ai/api/v1/images/models works.
-DEFAULT_IMAGE_MODEL = "openai/gpt-image-1-mini"
+#
+# This default is not the cheapest slug on that endpoint. It is the one that was
+# actually watched producing a usable tabloid front page -- legible headline
+# type, correct spelling, the handwritten marginalia -- at a measured $0.02 and
+# twelve seconds an image. That is about $50 a year at this publishing rate,
+# which for the thing readers actually look at is not the place to save $45.
+#
+# `openai/gpt-image-1-mini` at XLICKBAIT_IMAGE_QUALITY=low is roughly ten times
+# cheaper (~$0.002) and worth trying, but nobody here has seen its output yet.
+# It is the only listed model with a `quality` knob; the default below has none,
+# which is why XLICKBAIT_IMAGE_QUALITY defaults to `auto` and sends no such
+# field.
+DEFAULT_IMAGE_MODEL = "microsoft/mai-image-2.6-flash"
 
 
 def _int_env(name: str, default: int) -> int:
@@ -159,9 +168,9 @@ class Config:
     openrouter_api_key: str | None = None
     images_enabled: bool = True
     image_model: str = DEFAULT_IMAGE_MODEL
-    image_style: str = "tabloid"
+    image_style: str = "terse"
     image_aspect_ratio: str = "3:2"
-    image_quality: str = "low"
+    image_quality: str = "auto"
     image_max_width: int = 1200
     image_max_bytes: int = 400_000
     image_webp_quality: int = 82
@@ -288,13 +297,13 @@ def image_settings() -> dict[str, object]:
     that already exist must not be blocked by a malformed XLICKBAIT_ID_BATCH, for
     the same reason `load_for_hide` exists.
     """
-    style = os.environ.get("XLICKBAIT_IMAGE_STYLE", "tabloid").strip() or "tabloid"
+    style = os.environ.get("XLICKBAIT_IMAGE_STYLE", "terse").strip() or "terse"
     if style not in image_module.STYLES:
         raise SystemExit(
             f"XLICKBAIT_IMAGE_STYLE must be one of "
             f"{', '.join(sorted(image_module.STYLES))}, got {style!r}"
         )
-    quality = os.environ.get("XLICKBAIT_IMAGE_QUALITY", "low").strip() or "low"
+    quality = os.environ.get("XLICKBAIT_IMAGE_QUALITY", "auto").strip() or "auto"
     if quality not in IMAGE_QUALITIES:
         raise SystemExit(
             f"XLICKBAIT_IMAGE_QUALITY must be one of "
@@ -327,9 +336,14 @@ def image_settings() -> dict[str, object]:
         "image_budget_usd": _non_negative_float(
             "XLICKBAIT_IMAGE_BUDGET_USD", _float_env("XLICKBAIT_IMAGE_BUDGET_USD", 0.25)
         ),
+        # The measured cost of the default model is $0.02, so an assumed worst
+        # case of $0.01 would UNDER-bill exactly when the bill is invisible.
+        # Rounded up rather than to the observed figure: this number only gets
+        # used when OpenRouter did not say, which is not the moment to be
+        # optimistic.
         "image_assumed_cost_usd": _non_negative_float(
             "XLICKBAIT_IMAGE_ASSUMED_COST_USD",
-            _float_env("XLICKBAIT_IMAGE_ASSUMED_COST_USD", 0.01),
+            _float_env("XLICKBAIT_IMAGE_ASSUMED_COST_USD", 0.03),
         ),
         "image_timeout": _float_env("XLICKBAIT_IMAGE_TIMEOUT", 180.0),
     }

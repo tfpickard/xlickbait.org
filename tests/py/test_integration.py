@@ -233,7 +233,7 @@ def rendered(data: bytes) -> RenderedImage:
         mime="image/webp",
         width=320,
         height=200,
-        model="openai/gpt-image-1-mini",
+        model="microsoft/mai-image-2.6-flash",
         prompt="a prompt",
         cost_usd=0.002,
     )

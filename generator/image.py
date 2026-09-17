@@ -42,11 +42,26 @@ IMAGE_URL = "https://openrouter.ai/api/v1/images"
 
 PROMPT_DIR = Path(__file__).parent / "prompts"
 
-# Which prose file drives which look. `tabloid` types the headline into the
-# artwork the way a supermarket front page does; `photo` renders the scene alone
-# and forbids lettering outright, for anyone who would rather not stake the joke
-# on an image model's spelling.
+# Which prose file drives which look.
+#
+# `terse` is the default, and it is the default because it is the only one with
+# evidence behind it: it is, near enough verbatim, the one-line prompt that was
+# observed producing exactly the front page this feature is modelled on. The
+# temptation to replace it with something more thorough should be resisted until
+# something more thorough has actually been run.
+#
+# That is not a style preference, it is how these models behave. A long brief
+# dilutes the instruction, and a list of prohibitions is worse than useless --
+# "no logos, no watermarks, no text" puts logos, watermarks and text into the
+# conditioning, and they turn up in the output. The three guardrail sentences in
+# `image_terse.md` are therefore phrased as things that ARE true of the scene
+# rather than things that are forbidden.
+#
+# `tabloid` is the long-form brief, for when the terse one needs steering.
+# `photo` renders the scene alone and asks for no lettering at all, for anyone
+# who would rather not stake the joke on an image model's spelling.
 STYLES: dict[str, str] = {
+    "terse": "image_terse.md",
     "tabloid": "image_tabloid.md",
     "photo": "image_photo.md",
 }

@@ -17,7 +17,7 @@ function card(overrides: Partial<HeadlineCard> = {}): HeadlineCard {
 		primaryCategory: 'stat.ML',
 		categories: ['stat.ML'],
 		absUrl: 'https://arxiv.org/abs/0000.00001',
-		hasImage: false,
+		image: null,
 		...overrides
 	};
 }

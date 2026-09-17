@@ -36,7 +36,7 @@ export const load: PageServerLoad = async (event) => {
 	//
 	// Falls back to the static card when this headline has no illustration, which
 	// is the only state the site had before images existed.
-	const ogImage = new URL(item.hasImage ? imagePath(item.id) : '/og-default.png', event.url.origin)
+	const ogImage = new URL(item.image ? imagePath(item.id) : '/og-default.png', event.url.origin)
 		.href;
 
 	return { item, chumbox, canonical, ogImage };

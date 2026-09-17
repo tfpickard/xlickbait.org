@@ -18,7 +18,7 @@
 				<li>
 					<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- outbound link to arxiv.org; absUrl() builds it from the identifier so a malformed abs_url column cannot redirect a reader somewhere unexpected -->
 					<a href={absUrl(item.arxivId)}>
-						<Thumb id={item.id} arxivId={item.arxivId} hasImage={item.hasImage} />
+						<Thumb id={item.id} arxivId={item.arxivId} image={item.image} />
 						<span class="headline">{item.headline}</span>
 						<span class="source">{item.primaryCategory}</span>
 					</a>

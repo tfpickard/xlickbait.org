@@ -62,10 +62,10 @@ def ok_body(raw: bytes, *, cost: float | None = 0.002) -> dict:
 def painter_for(handler, **overrides) -> ImagePainter:
     settings: dict = {
         "api_key": "test-key",
-        "model": "openai/gpt-image-1-mini",
-        "style": "tabloid",
+        "model": "microsoft/mai-image-2.6-flash",
+        "style": "terse",
         "aspect_ratio": "3:2",
-        "quality": "low",
+        "quality": "auto",
         "max_width": 1200,
         "max_bytes": 400_000,
         "webp_quality": 82,
@@ -103,11 +103,24 @@ class TestPromptBuilding:
         with pytest.raises(SystemExit):
             load_style("nonexistent")
 
-    @pytest.mark.parametrize("style", ["tabloid", "photo"])
-    def test_every_style_file_exists_and_carries_all_three_tokens(self, style):
-        template = load_style(style)
-        for token in ("{{headline}}", "{{dek}}", "{{category}}"):
-            assert token in template
+    @pytest.mark.parametrize("style", ["terse", "tabloid", "photo"])
+    def test_every_style_file_exists_and_names_the_headline(self, style):
+        assert "{{headline}}" in load_style(style)
+
+    def test_the_default_style_stays_short(self):
+        # The one prompt with evidence behind it is one line long, and that is
+        # not incidental: a long brief dilutes the instruction. If someone grows
+        # this into an essay, it should be a deliberate decision that also
+        # updates this number, not a drift.
+        assert len(load_style("terse").split()) < 60
+
+    def test_the_default_style_states_its_guardrails_positively(self):
+        # A prohibition list puts the forbidden things into the conditioning and
+        # they turn up in the output. The guardrails describe what IS true of the
+        # scene instead.
+        terse = load_style("terse").lower()
+        for negation in ("no logos", "do not", "without any", "never"):
+            assert negation not in terse
 
     def test_the_photo_style_forbids_lettering(self):
         # The whole reason that style exists. If this instruction is ever edited
@@ -164,7 +177,7 @@ class TestPainting:
         assert image.mime == "image/webp"
         assert image.data[8:12] == b"WEBP"
         assert image.width == 1200
-        assert image.model == "openai/gpt-image-1-mini"
+        assert image.model == "microsoft/mai-image-2.6-flash"
         assert "Baffled" in image.prompt
 
     def test_sends_the_configured_generation_parameters(self):
@@ -177,7 +190,7 @@ class TestPainting:
         with painter_for(handler, aspect_ratio="16:9", quality="medium") as painter:
             painter.paint(headline="H", dek="D", category="C")
 
-        assert seen[0]["model"] == "openai/gpt-image-1-mini"
+        assert seen[0]["model"] == "microsoft/mai-image-2.6-flash"
         assert seen[0]["aspect_ratio"] == "16:9"
         assert seen[0]["quality"] == "medium"
         assert seen[0]["n"] == 1

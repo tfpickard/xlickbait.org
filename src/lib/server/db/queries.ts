@@ -42,7 +42,9 @@ const headlineColumns = {
 	 * precisely so a hundred kilobytes per row cannot end up on the front page by
 	 * accident; `getHeadlineImage` is the only thing that reads them.
 	 */
-	imageMime: headlineImages.mime
+	imageMime: headlineImages.mime,
+	imageWidth: headlineImages.width,
+	imageHeight: headlineImages.height
 } as const;
 
 /**
@@ -70,22 +72,43 @@ export interface HeadlineCard {
 	primaryCategory: string;
 	categories: string[];
 	absUrl: string;
-	/** True when `/i/<id>` will serve a picture; false means the SVG fallback. */
-	hasImage: boolean;
+	/**
+	 * `null` means no illustration -- render the SVG fallback.
+	 *
+	 * The dimensions travel with it because the thumbnail box is sized from them.
+	 * A tabloid illustration carries the headline typeset across its top, and
+	 * `object-fit: cover` into a box of the wrong shape crops exactly that off.
+	 * Every generated image is the same ratio in practice, but reading it from the
+	 * row rather than assuming it means `XLICKBAIT_IMAGE_ASPECT` can be changed
+	 * without the CSS quietly starting to lie.
+	 */
+	image: { width: number; height: number } | null;
 }
 
-type HeadlineRow = { imageMime: string | null } & Omit<HeadlineCard, 'hasImage'>;
+type HeadlineRow = {
+	imageMime: string | null;
+	imageWidth: number | null;
+	imageHeight: number | null;
+} & Omit<HeadlineCard, 'image'>;
 
 /**
  * The one place a row becomes a card.
  *
- * Every query funnels through this so `hasImage` cannot be true in one code path
- * and undefined in another -- which, in a Svelte component, renders as the SVG
- * fallback silently rather than as an error.
+ * Every query funnels through this so `image` cannot be populated in one code
+ * path and undefined in another -- which, in a Svelte component, renders as the
+ * SVG fallback silently rather than as an error.
+ *
+ * `Number()` on the dimensions for the same reason `listArchiveDays` casts its
+ * day key in SQL: what a driver makes of an integer column is the driver's
+ * business, and these two go straight into a CSS `aspect-ratio`.
  */
 function toCard(row: HeadlineRow): HeadlineCard {
-	const { imageMime, ...rest } = row;
-	return { ...rest, hasImage: imageMime !== null };
+	const { imageMime, imageWidth, imageHeight, ...rest } = row;
+	const image =
+		imageMime !== null && imageWidth !== null && imageHeight !== null
+			? { width: Number(imageWidth), height: Number(imageHeight) }
+			: null;
+	return { ...rest, image };
 }
 
 /**

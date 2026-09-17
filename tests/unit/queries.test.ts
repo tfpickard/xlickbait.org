@@ -256,24 +256,31 @@ describeDb('queries against the seeded dev branch', () => {
 	});
 
 	describe('illustrations', () => {
-		it('reports hasImage as a real boolean on every card', () => {
-			// Not "truthy". `hasImage` crosses the load boundary into a Svelte
+		it('reports image as either null or a usable pair of dimensions', () => {
+			// Not "truthy". `image` crosses the load boundary into a Svelte
 			// component, where `undefined` renders as the SVG fallback without
-			// complaining -- the exact failure this is here to make loud.
+			// complaining -- the exact failure this is here to make loud. The
+			// dimensions go straight into a CSS `aspect-ratio`, so a zero or a
+			// string would produce a silently collapsed box.
 			for (const item of all) {
-				expect(typeof item.hasImage).toBe('boolean');
+				expect(item).toHaveProperty('image');
+				if (item.image === null) continue;
+				expect(typeof item.image.width).toBe('number');
+				expect(typeof item.image.height).toBe('number');
+				expect(item.image.width).toBeGreaterThan(0);
+				expect(item.image.height).toBeGreaterThan(0);
 			}
 		});
 
 		it('the left join drops nothing', async () => {
 			// An innerJoin here would silently hide every headline without a
 			// picture, which on the day this shipped was all of them.
-			expect(all.some((h) => h.hasImage)).toBe(true);
-			expect(all.some((h) => !h.hasImage)).toBe(true);
+			expect(all.some((h) => h.image !== null)).toBe(true);
+			expect(all.some((h) => h.image === null)).toBe(true);
 		});
 
 		it('round-trips the bytes through base64 intact', async () => {
-			const withImage = all.find((h) => h.hasImage) as HeadlineCard;
+			const withImage = all.find((h) => h.image !== null) as HeadlineCard;
 			const image = await getHeadlineImage(withImage.id);
 
 			expect(image).not.toBeNull();
@@ -291,7 +298,7 @@ describeDb('queries against the seeded dev branch', () => {
 		});
 
 		it('returns null for a headline that has no image', async () => {
-			const without = all.find((h) => !h.hasImage) as HeadlineCard;
+			const without = all.find((h) => h.image === null) as HeadlineCard;
 			expect(await getHeadlineImage(without.id)).toBeNull();
 		});
 
