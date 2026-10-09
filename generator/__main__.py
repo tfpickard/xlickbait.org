@@ -1,6 +1,7 @@
 """Command line entry point.
 
 python -m generator run [--fresh N] [--vintage M] [--stagger HOURS] [--dry-run]
+python -m generator images [--limit N]
 python -m generator hide <id>
 """
 
@@ -14,10 +15,41 @@ from datetime import UTC, datetime
 
 from generator import config as config_module
 from generator import db, purge
+from generator import tags as tag_names
 from generator.arxiv.client import ArxivClient
 from generator.db import SchemaMismatch
+from generator.image import ImagePainter
 from generator.llm import HeadlineWriter
-from generator.run import generate, tags_for
+from generator.run import generate, illustrate, tags_for, tags_for_illustrations, targets_for
+
+
+def _painter(cfg: config_module.Config) -> ImagePainter:
+    assert cfg.openrouter_api_key
+    return ImagePainter(
+        api_key=cfg.openrouter_api_key,
+        model=cfg.image_model,
+        style=cfg.image_style,
+        aspect_ratio=cfg.image_aspect_ratio,
+        quality=cfg.image_quality,
+        max_width=cfg.image_max_width,
+        max_bytes=cfg.image_max_bytes,
+        webp_quality=cfg.image_webp_quality,
+        budget_usd=cfg.image_budget_usd,
+        assumed_cost_usd=cfg.image_assumed_cost_usd,
+        timeout=cfg.image_timeout,
+    )
+
+
+def _report_images(result: object) -> None:
+    from generator.run import IllustrationResult
+
+    assert isinstance(result, IllustrationResult)
+    print(
+        f"illustrated {result.made} headlines with {result.spent_usd:.4f} USD "
+        f"of image generation ({result.failed} failed)"
+    )
+    for note in result.notes:
+        print(f"  note: {note}")
 
 
 def _print_pending(result: object) -> None:
@@ -37,12 +69,15 @@ def _print_pending(result: object) -> None:
 
 def command_run(args: argparse.Namespace) -> int:
     cfg = config_module.load(fresh=args.fresh, vintage=args.vintage)
+    # --no-images turns the whole thing off for one invocation, so a run can go
+    # out while an image model is misbehaving without editing the cron env file.
+    illustrating = cfg.can_illustrate and not args.no_images
     rng = random.Random()
     now = datetime.now(UTC)
 
     with db.connect(cfg.database_url) as conn:
         try:
-            db.assert_schema(conn)
+            db.assert_schema(conn, images=illustrating)
         except SchemaMismatch as exc:
             print(str(exc), file=sys.stderr)
             return 1
@@ -60,6 +95,15 @@ def command_run(args: argparse.Namespace) -> int:
         # generator_runs row with no error and no counts -- the ledger losing
         # exactly the event it exists to record.
         result = None
+        # Initialised here, not inside the `if illustrating` below. It is read
+        # unconditionally after the block, and the paths that skip illustration
+        # -- no OPENROUTER_API_KEY, --no-images, a run that published nothing --
+        # are the COMMON ones. Leaving it unbound made the documented
+        # image-optional path raise UnboundLocalError after the headlines and
+        # the run record were already committed but before the cache purge:
+        # a successful publish reported as a crash, with the new content stuck
+        # behind its old TTL.
+        images = None
         persisted = 0
         try:
             with ArxivClient(
@@ -92,6 +136,18 @@ def command_run(args: argparse.Namespace) -> int:
                 headline_ids.append(db.upsert(conn, item, model=cfg.model))
                 persisted += 1
 
+            # After the headlines are committed, never before. An image is
+            # decoration on something that is already published; generating one
+            # first would mean a slow or failing image model delaying -- or, on
+            # an unhandled error, losing -- the thing people actually came for.
+            if illustrating and headline_ids:
+                with _painter(cfg) as painter:
+                    images = illustrate(
+                        painter,
+                        targets_for(result.pending, headline_ids),
+                        store=lambda hid, img: db.upsert_image(conn, hid, img),
+                    )
+
             assert run_id is not None
             db.finish_run(
                 conn,
@@ -123,14 +179,109 @@ def command_run(args: argparse.Namespace) -> int:
         f"{result.rejected} truth-gate rejections"
     )
     _print_pending(result)
+    if images is not None:
+        _report_images(images)
+    elif args.no_images:
+        print("images skipped (--no-images)")
+    else:
+        # The specific reason, not a guess. "no OPENROUTER_API_KEY" printed at a
+        # setup whose real problem was missing purge credentials is how someone
+        # spends an afternoon re-checking a key that was fine.
+        print(f"no images ({cfg.illustration_blocker}); headlines keep their SVG thumbnails")
 
     if cfg.can_purge:
-        tags = tags_for(result.pending, headline_ids)
+        tags = set(tags_for(result.pending, headline_ids))
+        if images is not None:
+            # `tags_for` deliberately omits `h:<id>` for a freshly published
+            # headline, on the reasoning that nothing can have been cached at a
+            # permalink that did not exist a second ago. The image pass broke
+            # that reasoning: it runs AFTER the headlines are committed and
+            # takes the better part of a minute, so a crawler or a reader can
+            # land on the new permalink in that window and cache it with the
+            # SVG fallback and the default OG card. Without this the permalink
+            # keeps that version for sMaxAge + swr -- over an hour -- despite
+            # the image being in the database the whole time.
+            #
+            # Only the ones that actually got an image: a headline whose image
+            # failed still renders exactly what was cached, so purging it would
+            # buy nothing.
+            tags |= set(tags_for_illustrations(images.illustrated))
+        tags = sorted(tags)
         assert cfg.netlify_purge_token and cfg.netlify_site_id
         made = purge.purge(tags, token=cfg.netlify_purge_token, site_id=cfg.netlify_site_id)
         print(f"purged {len(tags)} cache tags in {made} request(s)")
     else:
         print("no purge credentials configured; new headlines appear as the CDN TTL lapses")
+    return 0
+
+
+def command_images(args: argparse.Namespace) -> int:
+    """Backfill illustrations for headlines that do not have one.
+
+    Uses `load_for_images` rather than the full loader for the same reason
+    `hide` does: this needs a database, a key and the image knobs, and must not
+    be blocked by an arXiv or Anthropic setting it will never read.
+    """
+    cfg = config_module.load_for_images()
+    if not cfg.can_illustrate:
+        print(f"nothing to do: {cfg.illustration_blocker}", file=sys.stderr)
+        return 1
+
+    with db.connect(cfg.database_url) as conn:
+        try:
+            db.assert_schema(conn, images=True)
+        except SchemaMismatch as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        if args.limit < 1:
+            print("--limit must be a positive integer", file=sys.stderr)
+            return 1
+        targets = db.headlines_missing_images(conn, limit=args.limit)
+        if not targets:
+            print("every published headline already has an image")
+            return 0
+
+        if args.dry_run:
+            print(f"DRY RUN -- would illustrate {len(targets)} headlines. Nothing was written.")
+            for target in targets:
+                print(f"  [{target.headline_id}] {target.headline}")
+            return 0
+
+        with _painter(cfg) as painter:
+            result = illustrate(
+                painter, targets, store=lambda hid, img: db.upsert_image(conn, hid, img)
+            )
+
+    _report_images(result)
+
+    # Unlike a fresh run, these headlines have been on cached pages for a while
+    # with an <img> whose URL was returning 404. Nothing invalidates those pages
+    # on its own, so the purge is the half of this command that makes the other
+    # half visible.
+    # Deliberately blunt, for the same reason `hide` is: a backfilled headline
+    # also appears in the chumbox of OTHER headlines' permalinks, and those
+    # pages carry only their own `h:<id>` tag. Purging this headline's tags
+    # would leave it rendering the SVG fallback over there for up to
+    # sMaxAge + swr. Backfill is a rare, manual command, so the cost of a whole-
+    # site purge is nothing next to the point of running it.
+    #
+    # `tags_for_illustrations` is still what decides WHETHER to purge: it
+    # returns [] when nothing was illustrated, and an empty list must never
+    # become an absent `cache_tags` key, which is what purges the entire site by
+    # accident rather than on purpose.
+    if not result.illustrated:
+        return 0
+    tags = [tag_names.SITE]
+    if cfg.can_purge:
+        assert cfg.netlify_purge_token and cfg.netlify_site_id
+        made = purge.purge(tags, token=cfg.netlify_purge_token, site_id=cfg.netlify_site_id)
+        print(
+            f"purged the whole site in {made} request(s) "
+            "(a backfilled headline also sits in other pages' chumboxes)"
+        )
+    else:
+        print("no purge credentials configured; images appear as the CDN TTL lapses")
     return 0
 
 
@@ -145,8 +296,6 @@ def command_hide(args: argparse.Namespace) -> int:
     print(f"headline {args.id} is now hidden")
 
     if cfg.can_purge:
-        from generator import tags as tag_names
-
         assert cfg.netlify_purge_token and cfg.netlify_site_id
         # Deliberately blunt: `site` and not just this headline's own tags. A
         # hidden headline also sits in the chumbox of other headlines' permalinks,
@@ -183,7 +332,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print what would be inserted and write nothing at all",
     )
+    run.add_argument(
+        "--no-images",
+        action="store_true",
+        help="publish without illustrations, whatever the environment says",
+    )
     run.set_defaults(func=command_run)
+
+    images = sub.add_parser("images", help="backfill illustrations for headlines without one")
+    images.add_argument(
+        "--limit", type=int, default=10, help="how many headlines to illustrate (default 10)"
+    )
+    images.add_argument(
+        "--dry-run", action="store_true", help="list what would be illustrated and write nothing"
+    )
+    images.set_defaults(func=command_images)
 
     hide = sub.add_parser("hide", help="hide a headline (the kill switch)")
     hide.add_argument("id", type=int)

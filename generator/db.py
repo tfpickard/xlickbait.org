@@ -16,6 +16,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from generator.arxiv.atom import Paper
+from generator.image import RenderedImage
 from generator.llm import Headline
 
 # What the generator writes. If any of this is missing, the schema and this code
@@ -56,6 +57,26 @@ REQUIRED_COLUMNS: dict[str, set[str]] = {
     },
 }
 
+# Asserted only when the run is actually going to write an image. The table
+# arrived in a later migration than the rest, and "publish headlines" must not
+# acquire a dependency on "can store pictures" -- a generator pointed at a
+# database from before that migration still has a job to do. Checked up front
+# rather than per row so an enabled-but-unmigrated setup fails before it spends
+# money on an image it cannot store.
+REQUIRED_IMAGE_COLUMNS: dict[str, set[str]] = {
+    "headline_images": {
+        "headline_id",
+        "mime",
+        "width",
+        "height",
+        "byte_size",
+        "bytes",
+        "model",
+        "prompt",
+        "created_at",
+    },
+}
+
 REQUIRED_ENUMS: dict[str, set[str]] = {
     "headline_kind": {"fresh", "vintage"},
     "headline_status": {"published", "hidden"},
@@ -87,7 +108,7 @@ def connect(database_url: str) -> Iterator[psycopg.Connection]:
         yield conn
 
 
-def assert_schema(conn: psycopg.Connection) -> None:
+def assert_schema(conn: psycopg.Connection, *, images: bool = False) -> None:
     """Fail fast and loudly if the schema has moved underneath us.
 
     Deliberately a read-only check. The generator never runs DDL: migrations are
@@ -108,7 +129,10 @@ def assert_schema(conn: psycopg.Connection) -> None:
             actual.setdefault(row["table_name"], set()).add(row["column_name"])
 
         problems: list[str] = []
-        for table, columns in REQUIRED_COLUMNS.items():
+        required = dict(REQUIRED_COLUMNS)
+        if images:
+            required.update(REQUIRED_IMAGE_COLUMNS)
+        for table, columns in required.items():
             if table not in actual:
                 problems.append(f"missing table {table!r}")
                 continue
@@ -252,4 +276,91 @@ def finish_run(
              WHERE id = %s
             """,
             (fresh, vintage, rejected, error, run_id),
+        )
+
+
+@dataclass(frozen=True)
+class Illustratable:
+    """A published headline that has no picture yet."""
+
+    headline_id: int
+    headline: str
+    dek: str
+    primary_category: str
+    categories: list[str]
+    publish_at: datetime
+
+
+def headlines_missing_images(conn: psycopg.Connection, *, limit: int) -> list[Illustratable]:
+    """Published headlines with no image, newest first.
+
+    `status = 'published'` rather than the site's full visibility rule: a
+    headline scheduled for later today is exactly the one worth illustrating
+    NOW, before anybody can see it. Hidden ones are skipped -- a takedown should
+    not be spending money.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT h.id, h.headline, h.dek, h.publish_at,
+                   p.primary_category, p.categories
+              FROM headlines h
+              JOIN papers p ON p.arxiv_id = h.arxiv_id
+              LEFT JOIN headline_images i ON i.headline_id = h.id
+             WHERE h.status = 'published' AND i.headline_id IS NULL
+             ORDER BY h.publish_at DESC, h.id DESC
+             LIMIT %s
+            """,
+            (limit,),
+        )
+        return [
+            Illustratable(
+                headline_id=int(row["id"]),
+                headline=row["headline"],
+                dek=row["dek"],
+                primary_category=row["primary_category"],
+                categories=list(row["categories"]),
+                publish_at=row["publish_at"],
+            )
+            for row in cur.fetchall()
+        ]
+
+
+def upsert_image(conn: psycopg.Connection, headline_id: int, image: RenderedImage) -> None:
+    """Store one illustration, in its own transaction.
+
+    `byte_size` is written from Python rather than computed by the database so
+    the two can be compared later: a mismatch means the bytes were truncated in
+    transit, which is otherwise invisible in a column nothing reads as text.
+
+    ON CONFLICT DO UPDATE so regenerating a bad image is a re-run rather than a
+    manual DELETE. The site serves this under the `h:<id>` cache tag, so the
+    caller purges that tag after replacing one.
+    """
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO headline_images (headline_id, mime, width, height, byte_size,
+                                         bytes, model, prompt)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (headline_id) DO UPDATE SET
+                mime = EXCLUDED.mime,
+                width = EXCLUDED.width,
+                height = EXCLUDED.height,
+                byte_size = EXCLUDED.byte_size,
+                bytes = EXCLUDED.bytes,
+                model = EXCLUDED.model,
+                prompt = EXCLUDED.prompt,
+                created_at = now()
+            """,
+            (
+                headline_id,
+                image.mime,
+                image.width,
+                image.height,
+                len(image.data),
+                image.data,
+                image.model,
+                image.prompt,
+            ),
         )

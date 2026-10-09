@@ -18,7 +18,7 @@ env_file="${XLICKBAIT_ENV_FILE:-$HOME/.config/xlickbait/env}"
 if [ ! -f "$env_file" ]; then
 	echo "missing environment file: $env_file" >&2
 	echo "It should set XLICKBAIT_DB_URL, ANTHROPIC_API_KEY and optionally" >&2
-	echo "NETLIFY_PURGE_TOKEN and NETLIFY_SITE_ID." >&2
+	echo "NETLIFY_PURGE_TOKEN, NETLIFY_SITE_ID and OPENROUTER_API_KEY." >&2
 	exit 1
 fi
 

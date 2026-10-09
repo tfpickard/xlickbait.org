@@ -8,6 +8,11 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "anthropic>=1.6",
     "pydantic>=2.9",
+    # Not optional even though illustrations are. The cheap image models return
+    # PNG at a megabyte or two, and those bytes go into Postgres -- so the
+    # transcode to WebP is what keeps a year of headlines measured in tens of
+    # megabytes rather than gigabytes. See generator/image.py.
+    "pillow>=11",
 ]
 
 [project.optional-dependencies]

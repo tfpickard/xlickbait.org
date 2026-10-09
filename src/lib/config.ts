@@ -38,7 +38,25 @@ export const CACHE_WINDOWS = {
 	/** Archive index: counts per day, changes slowly. */
 	archive: { sMaxAge: 300, swr: 1800 },
 	/** Atom feed. */
-	feed: { sMaxAge: 300, swr: 1800 }
+	feed: { sMaxAge: 300, swr: 1800 },
+	/**
+	 * Headline illustrations.
+	 *
+	 * A year, because the bytes at `/i/<id>` are written once and the URL is
+	 * derived from the id: there is no later revision for a reader to miss. This
+	 * is the one response on the site the browser is allowed to keep as well (see
+	 * `CacheOptions.immutable`), which matters because it is also the only one
+	 * that costs a hundred kilobytes.
+	 *
+	 * A year is also long enough to outlive a takedown, which is why the
+	 * generator REFUSES to produce images without Netlify purge credentials:
+	 * `hide` clears this entry by purging the `site` tag, and with no purge path
+	 * the CDN would never re-run `getHeadlineImage` and the illustration of a
+	 * hidden headline would stay reachable. Shortening this window is not the
+	 * fix -- it would only narrow the hole while costing an origin round trip
+	 * per image per CDN node. See "Illustrations" in CLAUDE.md.
+	 */
+	image: { sMaxAge: 31_536_000, swr: 86_400 }
 } as const;
 
 /** Canonical arXiv abs URL for a paper. Never a PDF, never full text. */

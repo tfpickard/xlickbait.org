@@ -44,6 +44,21 @@ export function headlinePath(id: number, headline: string): string {
 }
 
 /**
+ * A headline illustration, without any base path applied.
+ *
+ * No slug, and deliberately so. The permalink carries one because humans read
+ * and share it; this URL is only ever an `<img src>`, and a slug on it would be
+ * a second spelling of the headline to keep in sync for nobody's benefit.
+ *
+ * Components should use `resolve('/i/[id=id]', ...)` so the base path is
+ * applied. This plain form exists for the OG tags, which need an absolute URL
+ * built from the request origin.
+ */
+export function imagePath(id: number): string {
+	return `/i/${id}`;
+}
+
+/**
  * Split the `<id>-<slug>` segment. The route matcher guarantees a leading run of
  * digits, so this only has to peel it off.
  */

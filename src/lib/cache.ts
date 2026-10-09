@@ -47,7 +47,30 @@ export interface CacheOptions {
 	swr: number;
 	/** Cache tags to attach. `site` is added automatically. */
 	tags?: readonly string[];
+	/**
+	 * Content at this URL never changes, so the browser may hold it too.
+	 *
+	 * Only for `/i/<id>`: a headline's illustration is written once and the URL
+	 * is derived from the id, so there is no revision to miss. Everything else on
+	 * this site is content whose whole point is that it changes without a
+	 * rebuild, and a browser holding it would defeat a purge for that reader.
+	 *
+	 * The browser TTL is deliberately an hour rather than a year even so. `hide`
+	 * is a takedown, and a takedown that leaves the picture in ten thousand
+	 * browser caches for twelve months is not one. An hour buys essentially all
+	 * the benefit -- the CDN, which is purgeable, absorbs the rest.
+	 */
+	immutable?: boolean;
 }
+
+/**
+ * How long a browser may hold an `immutable: true` response.
+ *
+ * Not `immutable` the Cache-Control directive, and not a year: see the note on
+ * `CacheOptions.immutable`. The CDN still gets the full window, because the CDN
+ * can be purged.
+ */
+const IMMUTABLE_BROWSER_MAX_AGE = 3600;
 
 /** Netlify's documented limits. Exceeding them is a silently dropped tag. */
 const MAX_TAGS = 500;
@@ -68,11 +91,18 @@ export function cacheTagValue(tags: readonly string[]): string {
  * browser holding it for a minute. Otherwise a reader who just saw a purge would
  * still be looking at the old front page.
  */
-export function cacheHeaders({ sMaxAge, swr, tags = [] }: CacheOptions): Record<string, string> {
+export function cacheHeaders({
+	sMaxAge,
+	swr,
+	tags = [],
+	immutable = false
+}: CacheOptions): Record<string, string> {
 	const shared = `public, s-maxage=${sMaxAge}, stale-while-revalidate=${swr}`;
 	const tagValue = cacheTagValue(tags);
 	return {
-		'cache-control': 'public, max-age=0, must-revalidate',
+		'cache-control': immutable
+			? `public, max-age=${IMMUTABLE_BROWSER_MAX_AGE}`
+			: 'public, max-age=0, must-revalidate',
 		'netlify-cdn-cache-control': `${shared}, durable`,
 		'cdn-cache-control': shared,
 		'netlify-cache-tag': tagValue,

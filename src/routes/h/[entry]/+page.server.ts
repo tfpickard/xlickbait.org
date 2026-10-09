@@ -2,7 +2,7 @@ import { error, redirect } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 import { getHeadline } from '$lib/server/db/queries';
 import { loadChumbox, setCache } from '$lib/server/page';
-import { headlinePath, parseHeadlineSegment } from '$lib/slug';
+import { headlinePath, imagePath, parseHeadlineSegment } from '$lib/slug';
 import { CACHE_WINDOWS } from '$lib/config';
 import { TAGS } from '$lib/cache';
 
@@ -29,5 +29,15 @@ export const load: PageServerLoad = async (event) => {
 
 	const chumbox = await loadChumbox(event, [item.id], CACHE_WINDOWS.item.sMaxAge);
 
-	return { item, chumbox, canonical };
+	// Open Graph wants an absolute URL, and the origin comes from the request for
+	// the same reason the feed derives its own: the site is served from a Netlify
+	// preview domain as well as its own, and a baked-in origin makes every share
+	// card on a preview point at production.
+	//
+	// Falls back to the static card when this headline has no illustration, which
+	// is the only state the site had before images existed.
+	const ogImage = new URL(item.image ? imagePath(item.id) : '/og-default.png', event.url.origin)
+		.href;
+
+	return { item, chumbox, canonical, ogImage };
 };

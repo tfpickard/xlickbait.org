@@ -18,12 +18,12 @@
 	<meta property="og:title" content={item.headline} />
 	<meta property="og:description" content={item.dek} />
 	<meta property="og:type" content="article" />
-	<meta property="og:image" content="/og-default.png" />
+	<meta property="og:image" content={data.ogImage} />
 	<meta property="article:published_time" content={item.publishAt} />
 	<meta name="twitter:card" content="summary_large_image" />
 	<meta name="twitter:title" content={item.headline} />
 	<meta name="twitter:description" content={item.dek} />
-	<meta name="twitter:image" content="/og-default.png" />
+	<meta name="twitter:image" content={data.ogImage} />
 </svelte:head>
 
 <article class="story">
@@ -49,7 +49,7 @@
 
 	<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- outbound link to arxiv.org; absUrl() builds it from the identifier so a malformed abs_url column cannot redirect a reader somewhere unexpected -->
 	<a class="thumb-link" href={absUrl(item.arxivId)} tabindex="-1" aria-hidden="true">
-		<Thumb arxivId={item.arxivId} wide />
+		<Thumb id={item.id} arxivId={item.arxivId} image={item.image} wide priority />
 	</a>
 
 	<FactCheck actualPoint={item.actualPoint} anchor={item.anchor} />
